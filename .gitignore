@@ -1,0 +1,35 @@
+# --- Python Basics ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Virtual Environments ---
+venv/
+.venv/
+env/
+.env
+
+# --- IDE Settings (PyCharm / VSCode) ---
+.idea/
+.vscode/
+*.swp
+
+# --- Large Model Files ---
+*.onnx
+*.nemo
+*.pt
+*.bin
+
+# --- Temporary Audio & Logs ---
+*.wav
+*.log
+temp_*
+
+# --- Unix Sockets ---
+*.sock
+
+# --- Build Artifacts (Nuitka / PyInstaller) ---
+build/
+dist/
+*.spec

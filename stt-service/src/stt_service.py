@@ -1,0 +1,154 @@
+import zmq
+import sounddevice as sd
+import numpy as np
+import collections
+import onnx_asr
+from pysilero_vad import SileroVoiceActivityDetector
+
+# --- CONFIG ---
+PUB_ADDR = "ipc:///tmp/neuropipe_pub.sock"
+REP_ADDR = "ipc:///tmp/neuropipe_cmd.sock"
+
+SAMPLE_RATE = 16000
+WINDOW_SIZE = 512
+STT_MODEL_NAME = "nemo-parakeet-tdt-0.6b-v3"
+
+# VAD
+VAD_THRESHOLD = 0.5
+DIGITAL_GAIN = 3.0
+SILENCE_DURATION_MS = 1000
+PRE_RECORD_MS = 500
+
+# Buffer Calcs
+CHUNKS_PER_SEC = SAMPLE_RATE // WINDOW_SIZE
+MAX_SILENCE_CHUNKS = int(SILENCE_DURATION_MS / 1000 * CHUNKS_PER_SEC)
+PRE_RECORD_CHUNKS = int(PRE_RECORD_MS / 1000 * CHUNKS_PER_SEC)
+
+
+class STTService:
+    def __init__(self):
+        print(f"Loading {STT_MODEL_NAME}...")
+        self.model = onnx_asr.load_model(STT_MODEL_NAME)
+        self.vad = SileroVoiceActivityDetector()
+
+        # ZMQ Setup
+        self.ctx = zmq.Context()
+        self.pub = self.ctx.socket(zmq.PUB)
+        self.pub.bind(PUB_ADDR)
+
+        self.rep = self.ctx.socket(zmq.REP)
+        self.rep.bind(REP_ADDR)
+
+        # Logic State
+        self.mode = "IDLE"
+        self.running = True
+
+    def float32_to_int16_bytes(self, audio_float):
+        return (np.clip(audio_float, -1.0, 1.0) * 32767).astype(
+            np.int16).tobytes()
+
+    def run(self):
+        print("NeuroPipe Service Started")
+        print(f"Mode: {self.mode}")
+
+        # Audio Buffers
+        pre_speech_buffer = collections.deque(maxlen=PRE_RECORD_CHUNKS)
+        recorded_audio = []
+        is_recording = False
+        silence_counter = 0
+
+        # Start Stream (Blocking Read Mode)
+        with sd.InputStream(samplerate=SAMPLE_RATE, blocksize=WINDOW_SIZE,
+                            channels=1, dtype="float32") as stream:
+
+            while self.running:
+                try:
+                    # Check if a command is waiting.
+                    msg = self.rep.recv_json(flags=zmq.NOBLOCK)
+                    cmd = msg.get("command")
+                    print(f"Cmd: {cmd}")
+
+                    if cmd == "set_mode":
+                        self.mode = msg.get("mode", "IDLE")
+                        # Reset states
+                        is_recording = False
+                        recorded_audio = []
+                        self.pub.send_json(
+                            {"event": "mode_changed", "mode": self.mode})
+                        self.rep.send_json({"status": "ok"})
+
+                    elif cmd == "manual_stop":
+                        # Force Transcribe
+                        if recorded_audio:
+                            full_audio = np.concatenate(recorded_audio)
+                            text = self.model.recognize(full_audio)
+                            if text.strip():
+                                self.pub.send_json({"event": "transcription",
+                                                    "text": text.strip()})
+
+                        # Reset
+                        self.mode = "IDLE"
+                        is_recording = False
+                        recorded_audio = []
+                        self.rep.send_json({"status": "ok"})
+
+                except zmq.Again:
+                    pass  # No command received, continue to audio processing
+
+                # AUDIO PROCESSING
+                data, _ = stream.read(WINDOW_SIZE)
+                chunk = data.flatten()
+
+                # Gain
+                if DIGITAL_GAIN != 1.0:
+                    chunk = np.clip(chunk * DIGITAL_GAIN, -1.0, 1.0)
+
+                # --- VAD MODE ---
+                if self.mode == "VAD":
+                    prob = self.vad(self.float32_to_int16_bytes(chunk))
+
+                    if not is_recording:
+                        pre_speech_buffer.append(chunk)
+                        if prob > VAD_THRESHOLD:
+                            is_recording = True
+                            print("VAD Start")
+                            self.pub.send_json({"event": "listening_start"})
+                            recorded_audio.extend(pre_speech_buffer)
+                            pre_speech_buffer.clear()
+                    else:
+                        recorded_audio.append(chunk)
+                        if prob < VAD_THRESHOLD:
+                            silence_counter += 1
+                        else:
+                            silence_counter = 0
+
+                        if silence_counter > MAX_SILENCE_CHUNKS:
+                            print("VAD Stop & Transcribe")
+                            full_audio = np.concatenate(recorded_audio)
+                            text = self.model.recognize(full_audio)
+
+                            if text.strip():
+                                print(f"> {text}")
+                                self.pub.send_json({"event": "transcription",
+                                                    "text": text.strip()})
+
+                            is_recording = False
+                            recorded_audio = []
+                            silence_counter = 0
+                            self.pub.send_json({"event": "listening_end"})
+
+                # --- MANUAL MODE ---
+                elif self.mode == "MANUAL":
+                    recorded_audio.append(chunk)
+
+                # --- IDLE MODE ---
+                else:
+                    pass  # Do nothing, just consume audio to keep buffer clear
+
+
+if __name__ == "__main__":
+    service = STTService()
+    try:
+        service.run()
+    except KeyboardInterrupt:
+        print("Stopping")
