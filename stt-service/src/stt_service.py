@@ -3,6 +3,7 @@ import sounddevice as sd
 import numpy as np
 import collections
 import onnx_asr
+import time  # Needed for sleep in IDLE mode
 from pysilero_vad import SileroVoiceActivityDetector
 
 # --- CONFIG ---
@@ -23,6 +24,8 @@ PRE_RECORD_MS = 500
 CHUNKS_PER_SEC = SAMPLE_RATE // WINDOW_SIZE
 MAX_SILENCE_CHUNKS = int(SILENCE_DURATION_MS / 1000 * CHUNKS_PER_SEC)
 PRE_RECORD_CHUNKS = int(PRE_RECORD_MS / 1000 * CHUNKS_PER_SEC)
+MAX_RECORDING_SECONDS = 15
+MAX_RECORDING_CHUNKS = int(MAX_RECORDING_SECONDS * CHUNKS_PER_SEC)
 
 
 class STTService:
@@ -42,10 +45,27 @@ class STTService:
         # Logic State
         self.mode = "IDLE"
         self.running = True
+        self.stream = None
 
     def float32_to_int16_bytes(self, audio_float):
-        return (np.clip(audio_float, -1.0, 1.0) * 32767).astype(
-            np.int16).tobytes()
+        return (audio_float * 32767).astype(np.int16).tobytes()
+
+    def start_stream(self):
+        """Opens the microphone stream"""
+        if self.stream is None:
+            print("Microphone: ON")
+            self.stream = sd.InputStream(samplerate=SAMPLE_RATE,
+                                         blocksize=WINDOW_SIZE,
+                                         channels=1, dtype="float32")
+            self.stream.start()
+
+    def stop_stream(self):
+        """Closes the microphone stream to save resources"""
+        if self.stream is not None:
+            print("Microphone: OFF")
+            self.stream.stop()
+            self.stream.close()
+            self.stream = None
 
     def run(self):
         print("NeuroPipe Service Started")
@@ -57,49 +77,67 @@ class STTService:
         is_recording = False
         silence_counter = 0
 
-        # Start Stream (Blocking Read Mode)
-        with sd.InputStream(samplerate=SAMPLE_RATE, blocksize=WINDOW_SIZE,
-                            channels=1, dtype="float32") as stream:
+        while self.running:
+            # CHECK COMMANDS (Non-Blocking)
+            try:
+                msg = self.rep.recv_json(flags=zmq.NOBLOCK)
+                cmd = msg.get("command")
+                print(f"Cmd: {cmd}")
 
-            while self.running:
-                try:
-                    # Check if a command is waiting.
-                    msg = self.rep.recv_json(flags=zmq.NOBLOCK)
-                    cmd = msg.get("command")
-                    print(f"Cmd: {cmd}")
+                if cmd == "set_mode":
+                    new_mode = msg.get("mode", "IDLE")
 
-                    if cmd == "set_mode":
-                        self.mode = msg.get("mode", "IDLE")
-                        # Reset states
-                        is_recording = False
-                        recorded_audio = []
-                        self.pub.send_json(
-                            {"event": "mode_changed", "mode": self.mode})
-                        self.rep.send_json({"status": "ok"})
+                    # Logic: Handle Stream state based on Mode
+                    if new_mode == "IDLE":
+                        self.stop_stream()
+                    elif new_mode in ["VAD", "MANUAL"]:
+                        if self.mode == "IDLE":
+                            self.start_stream()
 
-                    elif cmd == "manual_stop":
-                        # Force Transcribe
-                        if recorded_audio:
-                            full_audio = np.concatenate(recorded_audio)
-                            text = self.model.recognize(full_audio)
-                            if text.strip():
-                                self.pub.send_json({"event": "transcription",
-                                                    "text": text.strip()})
+                    self.mode = new_mode
 
-                        # Reset
-                        self.mode = "IDLE"
-                        is_recording = False
-                        recorded_audio = []
-                        self.rep.send_json({"status": "ok"})
+                    # Reset states
+                    is_recording = False
+                    recorded_audio = []
 
-                except zmq.Again:
-                    pass  # No command received, continue to audio processing
+                    # Reset VAD internal state when switching modes
+                    if self.mode == "VAD":
+                        self.vad.reset()
 
-                # AUDIO PROCESSING
-                data, _ = stream.read(WINDOW_SIZE)
+                    self.pub.send_json(
+                        {"event": "mode_changed", "mode": self.mode})
+                    self.rep.send_json({"status": "ok"})
+
+                elif cmd == "manual_stop":
+                    # Force Transcribe logic
+                    if recorded_audio:
+                        full_audio = np.concatenate(recorded_audio)
+                        text = self.model.recognize(full_audio)
+                        if text.strip():
+                            self.pub.send_json({"event": "transcription",
+                                                "text": text.strip()})
+
+                    # Go to IDLE and Close Stream
+                    self.mode = "IDLE"
+                    self.stop_stream()
+
+                    is_recording = False
+                    recorded_audio = []
+                    self.rep.send_json({"status": "ok"})
+
+            except zmq.Again:
+                pass
+
+            # AUDIO PROCESSING
+            if self.mode == "IDLE":
+                time.sleep(0.05)
+                continue
+
+            try:
+                data, _ = self.stream.read(WINDOW_SIZE)
                 chunk = data.flatten()
 
-                # Gain
+                # Gain & Clip
                 if DIGITAL_GAIN != 1.0:
                     chunk = np.clip(chunk * DIGITAL_GAIN, -1.0, 1.0)
 
@@ -122,8 +160,10 @@ class STTService:
                         else:
                             silence_counter = 0
 
-                        if silence_counter > MAX_SILENCE_CHUNKS:
-                            print("VAD Stop & Transcribe")
+                        # Stop Conditions
+                        if silence_counter > MAX_SILENCE_CHUNKS or len(
+                                recorded_audio) > MAX_RECORDING_CHUNKS:
+                            print("Processing...")
                             full_audio = np.concatenate(recorded_audio)
                             text = self.model.recognize(full_audio)
 
@@ -135,15 +175,18 @@ class STTService:
                             is_recording = False
                             recorded_audio = []
                             silence_counter = 0
+                            self.vad.reset()  # Reset VAD between sentences
                             self.pub.send_json({"event": "listening_end"})
 
                 # --- MANUAL MODE ---
                 elif self.mode == "MANUAL":
                     recorded_audio.append(chunk)
 
-                # --- IDLE MODE ---
-                else:
-                    pass  # Do nothing, just consume audio to keep buffer clear
+            except Exception as e:
+                print(f"Audio Error: {e}")
+                # Emergency fallback: if stream crashes, go idle
+                self.mode = "IDLE"
+                self.stop_stream()
 
 
 if __name__ == "__main__":
@@ -152,3 +195,4 @@ if __name__ == "__main__":
         service.run()
     except KeyboardInterrupt:
         print("Stopping")
+        service.stop_stream()
