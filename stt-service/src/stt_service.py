@@ -31,7 +31,10 @@ MAX_RECORDING_CHUNKS = int(MAX_RECORDING_SECONDS * CHUNKS_PER_SEC)
 class STTService:
     def __init__(self):
         print(f"Loading {STT_MODEL_NAME}...")
-        self.model = onnx_asr.load_model(STT_MODEL_NAME)
+        self.model = onnx_asr.load_model(
+            STT_MODEL_NAME,
+            quantization="int8"
+        )
         self.vad = SileroVoiceActivityDetector()
 
         # ZMQ Setup
@@ -112,7 +115,10 @@ class STTService:
                     # Force Transcribe logic
                     if recorded_audio:
                         full_audio = np.concatenate(recorded_audio)
-                        text = self.model.recognize(full_audio)
+                        text = self.model.recognize(
+                            full_audio,
+                            # language="en"
+                        )
                         if text.strip():
                             self.pub.send_json({"event": "transcription",
                                                 "text": text.strip()})

@@ -5,7 +5,7 @@
 > **Architecture:**  
 > Microphone 🎤 → [Silero VAD] → [Parakeet TDT Model] → **ZeroMQ Pub/Sub** → Clients (Shell, Assistant, Scripts)
 
-## ✨ Features
+## Features
 *   **Zero Latency:** Uses Unix Domain Sockets (IPC) for instant communication.
 *   **Local Only:** No data leaves your machine. Powered by ONNX Runtime.
 *   **Modular:** The STT service runs as a system daemon. Clients connect only when needed.
@@ -24,7 +24,7 @@ sudo pacman -S base-devel python git pipewire pipewire-pulse alsa-utils
 sudo pacman -S wtype wl-clipboard
 
 # Compilation Tools (If building binaries with Nuitka)
-sudo pacman -S patchelf ccache zstandard
+sudo pacman -S patchelf ccache
 ```
 
 ### Debian / Ubuntu
@@ -94,8 +94,8 @@ systemctl --user status neuropipe-stt.service
 cd ../stt-client
 source venv/bin/activate
 pip install nuitka zstandard
-python -m nuitka --onefile --output-dir=dist --output-filename=neuro-trigger src/trigger_input.py
-mv dist/trigger_input ~/.local/bin/neuro-trigger
+python -m nuitka --onefile --output-dir=dist --output-filename=neuro-stt-trigger src/trigger_input.py
+mv dist/neuro-stt-trigger ~/.local/bin/neuro-stt-trigger
 ```
 
 ### 4. Configure Hyprland:
