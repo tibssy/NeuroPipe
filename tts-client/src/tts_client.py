@@ -53,7 +53,7 @@ def main():
     # Speak Command
     p_speak = subparsers.add_parser("speak", help="Send text to TTS")
     p_speak.add_argument("text", type=str, help="Text to speak")
-    p_speak.add_argument("--voice", type=str, default="af_bella",
+    p_speak.add_argument("--voice", type=str, default="af_heart",
                          help="Voice ID")
     p_speak.add_argument("--speed", type=float, default=1.0, help="Speed")
     p_speak.add_argument("--engine", type=str, default="kokoro",
