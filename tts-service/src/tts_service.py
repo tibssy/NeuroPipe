@@ -1,14 +1,12 @@
 import zmq
 import time
 import sounddevice as sd
-import numpy as np
 import threading
 import queue
 import gc
 
 # Engine Imports
 from engines.kokoro import KokoroEngine
-
 # from engines.piper import PiperEngine
 
 # --- CONFIG ---
@@ -41,6 +39,7 @@ class TTSService:
         self.audio_queue = queue.Queue()
         self.interrupt_event = threading.Event()
         self.current_sentence = ""  # Tracks what is currently being spoken
+        self.last_activity = time.time()
 
         # Start Player
         threading.Thread(target=self._player_loop, daemon=True).start()
@@ -85,10 +84,18 @@ class TTSService:
                         {"event": "sentence_done", "sentence": sentence})
 
                 self.audio_queue.task_done()
+                self.last_activity = time.time()
 
             except queue.Empty:
-                # Handle Idle Unload logic...
-                pass
+                # --- IDLE CHECK ---
+                if self.active_engine and (
+                        time.time() - self.last_activity > IDLE_TIMEOUT):
+                    print(f"Idle for {IDLE_TIMEOUT}s. Releasing resources.")
+                    self.active_engine.unload()
+                    self.active_engine = None
+                    self.active_engine_name = None
+                    gc.collect()
+                    print("System is now in Cold Standby.")
 
     def run(self):
         print("TTS Service Running...")
@@ -97,6 +104,7 @@ class TTSService:
             cmd = msg.get("command")
 
             if cmd == "speak":
+                self.last_activity = time.time()
                 self.interrupt_event.clear()
                 text = msg.get("text")
                 engine = msg.get("engine", "kokoro")

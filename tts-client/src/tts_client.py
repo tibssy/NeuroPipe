@@ -15,14 +15,14 @@ def listen_to_events():
     sub.connect(PUB_ADDR)
     sub.setsockopt_string(zmq.SUBSCRIBE, "")
 
-    print(f"👂 Listening for events on {PUB_ADDR}...")
+    print(f"Listening for events on {PUB_ADDR}...")
     try:
         while True:
             msg = sub.recv_json()
             event = msg.get("event")
 
             if event == "speaking":
-                print(f"🔊 Speaking: '{msg.get('sentence')}'")
+                print(f"Speaking: '{msg.get('sentence')}'")
             elif event == "sentence_done":
                 # print(f"Finished: '{msg.get('sentence')}'")
                 pass
