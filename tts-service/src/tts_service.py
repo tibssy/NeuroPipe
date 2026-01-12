@@ -68,13 +68,25 @@ class TTSService:
                 self.pub_socket.send_json(
                     {"event": "speaking", "sentence": sentence})
 
-                # Play (Blocking)
-                sd.play(chunk, samplerate=sr, blocking=True)
+                # --- PLAYBACK LOGIC ---
+                try:
+                    with sd.OutputStream(samplerate=sr, channels=1,
+                                         dtype='float32') as stream:
+                        block_size = 2048
+                        total_samples = len(chunk)
 
-                # Check interruption on playback
+                        for i in range(0, total_samples, block_size):
+                            if self.interrupt_event.is_set():
+                                break
+
+                            data_slice = chunk[i: i + block_size]
+                            stream.write(data_slice)
+
+                except Exception as e:
+                    print(f"Playback Error: {e}")
+
+                # Check result
                 if self.interrupt_event.is_set():
-                    sd.stop()
-                    # Notify interruption with the specific sentence that got cut
                     self.pub_socket.send_json({
                         "event": "interrupted",
                         "last_sentence": sentence
@@ -123,7 +135,6 @@ class TTSService:
             elif cmd == "stop":
                 print("Interrupt Signal!")
                 self.interrupt_event.set()
-                sd.stop()
 
                 # Clear pending queue
                 with self.audio_queue.mutex:
