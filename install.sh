@@ -8,6 +8,8 @@ SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 
 TTS_DIR="$ROOT_DIR/tts-service"
 STT_DIR="$ROOT_DIR/stt-service"
+TTS_CLIENT_DIR="$ROOT_DIR/tts-client"
+STT_CLIENT_DIR="$ROOT_DIR/stt-client"
 RELEASE_API_URL="https://api.github.com/repos/tibssy/NeuroPipe/releases/latest"
 
 declare -a SERVICE_UNITS=()
@@ -222,6 +224,21 @@ install_component_files() {
   printf "\e[32mInstalled service: %s\e[0m\n" "$SYSTEMD_USER_DIR/$unit_name"
 }
 
+install_client_binary() {
+  local component_dir="$1"
+  local binary_name="$2"
+
+  local built_binary="$component_dir/dist/$binary_name"
+
+  if [[ ! -f "$built_binary" ]]; then
+    printf "\e[31mError: Cannot install, missing binary at %s\e[0m\n" "$built_binary"
+    return 1
+  fi
+
+  install -Dm755 "$built_binary" "$LOCAL_BIN_DIR/$binary_name"
+  printf "\e[32mInstalled binary: %s\e[0m\n" "$LOCAL_BIN_DIR/$binary_name"
+}
+
 prompt_install_approval() {
   local artifacts_label="$1"
   printf "\n\e[36m%s are ready.\e[0m\n" "$artifacts_label"
@@ -393,13 +410,17 @@ run_prebuilt_flow() {
   case "$selection" in
     1)
       download_prebuilt_binary "TTS Service" "$TTS_DIR" "neuro-tts-service" "$release_arch"
+      download_prebuilt_binary "TTS Trigger" "$TTS_CLIENT_DIR" "neuro-tts-trigger" "$release_arch"
       ;;
     2)
       download_prebuilt_binary "STT Service" "$STT_DIR" "neuro-stt-service" "$release_arch"
+      download_prebuilt_binary "STT Trigger" "$STT_CLIENT_DIR" "neuro-stt-trigger" "$release_arch"
       ;;
     3)
       download_prebuilt_binary "TTS Service" "$TTS_DIR" "neuro-tts-service" "$release_arch"
+      download_prebuilt_binary "TTS Trigger" "$TTS_CLIENT_DIR" "neuro-tts-trigger" "$release_arch"
       download_prebuilt_binary "STT Service" "$STT_DIR" "neuro-stt-service" "$release_arch"
+      download_prebuilt_binary "STT Trigger" "$STT_CLIENT_DIR" "neuro-stt-trigger" "$release_arch"
       ;;
     *)
       printf "\e[31mUnknown prebuilt selection: %s\e[0m\n" "$selection"
@@ -413,13 +434,17 @@ run_prebuilt_flow() {
   case "$selection" in
     1)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
+      install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
       ;;
     2)
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
+      install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
       ;;
     3)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
+      install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
+      install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
       ;;
   esac
 
