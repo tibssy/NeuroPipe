@@ -3,7 +3,7 @@
 **NeuroPipe** is a modular, privacy-first AI ecosystem designed for Linux. It acts as the backend infrastructure to connect local Speech-to-Text (STT), Text-to-Speech (TTS), and Large Language Models (LLM) using efficient Linux primitives like **ZeroMQ**, **Unix Sockets**, and **Systemd**.
 
 > **Architecture:**  
-> Microphone 🎤 → [Silero VAD] → [Parakeet TDT Model] → **ZeroMQ Pub/Sub** → Clients (Shell, Assistant, Scripts)
+> Microphone → [Silero VAD] → [Parakeet TDT Model] → **ZeroMQ Pub/Sub** → Clients (Shell, Assistant, Scripts)
 
 ## Features
 *   **Zero Latency:** Uses Unix Domain Sockets (IPC) for instant communication.
@@ -11,95 +11,78 @@
 *   **Modular:** The STT service runs as a system daemon. Clients connect only when needed.
 *   **Wayland Ready:** Optimized for integration with Hyprland and Sway.
 
-## System Dependencies
-
-Before installing the Python environment, ensure your system has the necessary build tools and audio libraries.
-
-### Arch Linux (Pacman)
-```bash
-# Audio & Build Tools
-sudo pacman -S base-devel python git pipewire pipewire-pulse alsa-utils
-
-# Wayland Utilities (For Keybinding Trigger)
-sudo pacman -S wtype wl-clipboard
-
-# Compilation Tools (If building binaries with Nuitka)
-sudo pacman -S patchelf ccache
-```
-
-### Debian / Ubuntu
-```bash
-sudo apt install build-essential python3-dev git pipewire pipewire-pulse alsa-utils
-sudo apt install wtype wl-clipboard patchelf ccache
-```
-
 ## Installation
 
-### 1. Clone the Repository
+### 1. Clone the repository
 ```bash
 git clone https://github.com/tibssy/NeuroPipe.git
 cd NeuroPipe
 ```
 
-### 2. Setup STT Service
-The service handles the microphone and AI inference.
+### 2. Run the installer
+
+Use the root installer script. It provides interactive menus for:
+
+- build from source (`TTS only`, `STT only`, or `both`)
+- use prebuilt Linux binaries (`x86_64` or `arm64`, auto-detected)
+- safe confirmation before copying files and enabling services
+
 ```bash
-cd stt-service
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+./install.sh
 ```
 
-### 3. Setup Client & Trigger
-The client sends commands to the service (Start, Stop, VAD Mode).
+### Optional: one-liner install method
+
+If you prefer not to keep a local clone, you can run the installer directly from the latest `main` tarball:
+
 ```bash
-cd ../stt-client
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+tmp_dir="$(mktemp -d)" && curl -fsSL https://github.com/tibssy/NeuroPipe/archive/refs/heads/main.tar.gz | tar -xz -C "$tmp_dir" && bash "$tmp_dir/NeuroPipe-main/install.sh"
+```
+
+The installer will:
+
+- build or download selected binaries
+- copy binaries to `~/.local/bin`
+- install service units to `~/.config/systemd/user`
+- run `systemctl --user daemon-reload`
+- enable and start selected services
+
+It also checks required dependencies and prints package-manager-specific install hints if something is missing.
+
+## Service checks
+
+```bash
+systemctl --user status neuropipe-stt.service
+systemctl --user status neuropipe-tts.service
+```
+
+## Quick usage
+
+### STT one-shot trigger
+
+```bash
+text=$(~/.local/bin/neuro-stt-trigger)
+printf 'Heard: %s\n' "$text"
+```
+
+### TTS trigger
+
+```bash
+~/.local/bin/neuro-tts-trigger speak "Hello from NeuroPipe"
+~/.local/bin/neuro-tts-trigger stop
 ```
 
 ## Hyprland Integration (Voice Typing)
-You can compile the client trigger into a standalone binary for instant startup latency using Nuitka.
+Add this to `~/.config/hypr/hyprland.conf`:
 
-### 1. Build the Service:
-```bash
-cd ../stt-service
-source venv/bin/activate
-pip install nuitka zstandard
-python -m nuitka --onefile \
-        --include-package-data=pysilero_vad \
-        --include-data-files=$VIRTUAL_ENV/lib/python*/site-packages/pysilero_vad/*.bin=pysilero_vad/ \
-        --include-package-data=onnx_asr \
-        --output-dir=dist \
-        --output-filename=neuro-stt-service \
-        --assume-yes-for-downloads \
-        --lto=yes \
-        --python-flag=no_site \
-        src/stt_service.py
-mv dist/neuro-stt-service ~/.local/bin/neuro-stt-service
-cp src/service/neuropipe-stt.service ~/.config/systemd/user/neuropipe-stt.service
+```ini
+bind = SUPER, V, exec, bash -lc 'text=$($HOME/.local/bin/neuro-stt-trigger); [ -n "$text" ] && wtype -d 5 "$text"'
 ```
 
-### 2. Start and verify the Service:
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now neuropipe-stt.service
-systemctl --user status neuropipe-stt.service
-```
+## Niri Integration
 
+Add this style of binding to your Niri config:
 
-### 3. Build the Trigger:
-```bash
-cd ../stt-client
-source venv/bin/activate
-pip install nuitka zstandard
-python -m nuitka --onefile --output-dir=dist --output-filename=neuro-stt-trigger src/trigger_input.py
-mv dist/neuro-stt-trigger ~/.local/bin/neuro-stt-trigger
-```
-
-### 4. Configure Hyprland:
-Add this to your ~/.config/hypr/hyprland.conf. This binds Super + L to listen to your voice and type the result into the active window.
-```Ini
-bind = Super, L, exec, bash -c 'text=$($HOME/.local/bin/neuro-trigger); wtype -d 5 "$text"'
+```kdl
+Mod+V { spawn "bash" "-lc" "text=$($HOME/.local/bin/neuro-stt-trigger); [ -n \"$text\" ] && wtype -d 5 \"$text\""; }
 ```

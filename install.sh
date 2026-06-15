@@ -8,8 +8,10 @@ SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 
 TTS_DIR="$ROOT_DIR/tts-service"
 STT_DIR="$ROOT_DIR/stt-service"
+RELEASE_API_URL="https://api.github.com/repos/tibssy/NeuroPipe/releases/latest"
 
 declare -a SERVICE_UNITS=()
+PKG_MANAGER=""
 
 clear_screen() {
   if command -v clear >/dev/null 2>&1; then
@@ -38,9 +40,117 @@ require_command() {
   fi
 }
 
-verify_prerequisites() {
-  require_command uv
-  require_command systemctl
+detect_package_manager() {
+  if [[ -n "$PKG_MANAGER" ]]; then
+    return 0
+  fi
+
+  if command -v pacman >/dev/null 2>&1; then
+    PKG_MANAGER="pacman"
+  elif command -v apt-get >/dev/null 2>&1; then
+    PKG_MANAGER="apt"
+  elif command -v dnf >/dev/null 2>&1; then
+    PKG_MANAGER="dnf"
+  elif command -v zypper >/dev/null 2>&1; then
+    PKG_MANAGER="zypper"
+  elif command -v apk >/dev/null 2>&1; then
+    PKG_MANAGER="apk"
+  else
+    PKG_MANAGER="unknown"
+  fi
+}
+
+print_dependency_install_hint() {
+  local profile="$1"
+  detect_package_manager
+
+  printf "\n\e[36mSuggested install command for %s:\e[0m\n" "$profile"
+
+  case "$PKG_MANAGER" in
+    pacman)
+      if [[ "$profile" == "runtime" ]]; then
+        printf "  sudo pacman -S --needed wtype wl-clipboard pipewire\n"
+      else
+        printf "  sudo pacman -S --needed base-devel python patchelf ccache\n"
+      fi
+      ;;
+    apt)
+      if [[ "$profile" == "runtime" ]]; then
+        printf "  sudo apt-get install -y wtype wl-clipboard pipewire\n"
+      else
+        printf "  sudo apt-get install -y build-essential python3 patchelf ccache\n"
+      fi
+      ;;
+    dnf)
+      if [[ "$profile" == "runtime" ]]; then
+        printf "  sudo dnf install -y wtype wl-clipboard pipewire\n"
+      else
+        printf "  sudo dnf install -y gcc gcc-c++ make python3 patchelf ccache\n"
+      fi
+      ;;
+    zypper)
+      if [[ "$profile" == "runtime" ]]; then
+        printf "  sudo zypper install -y wtype wl-clipboard pipewire\n"
+      else
+        printf "  sudo zypper install -y gcc gcc-c++ make python3 patchelf ccache\n"
+      fi
+      ;;
+    apk)
+      if [[ "$profile" == "runtime" ]]; then
+        printf "  sudo apk add wtype wl-clipboard pipewire\n"
+      else
+        printf "  sudo apk add build-base python3 patchelf ccache\n"
+      fi
+      ;;
+    *)
+      printf "  Install required packages manually for your distro.\n"
+      ;;
+  esac
+}
+
+check_runtime_dependencies() {
+  local -a missing=()
+
+  command -v systemctl >/dev/null 2>&1 || missing+=("systemctl")
+  command -v wtype >/dev/null 2>&1 || missing+=("wtype")
+  command -v wl-copy >/dev/null 2>&1 || missing+=("wl-copy (wl-clipboard)")
+  command -v pw-cli >/dev/null 2>&1 || missing+=("pw-cli (pipewire)")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    printf "\e[31mError: Missing runtime dependencies:\e[0m\n"
+    printf "  - %s\n" "${missing[@]}"
+    print_dependency_install_hint "runtime"
+    return 1
+  fi
+}
+
+check_build_dependencies() {
+  local -a missing=()
+
+  command -v uv >/dev/null 2>&1 || missing+=("uv")
+  command -v python3 >/dev/null 2>&1 || missing+=("python3")
+  command -v gcc >/dev/null 2>&1 || missing+=("gcc")
+  command -v g++ >/dev/null 2>&1 || missing+=("g++")
+  command -v make >/dev/null 2>&1 || missing+=("make")
+  command -v patchelf >/dev/null 2>&1 || missing+=("patchelf")
+  command -v ccache >/dev/null 2>&1 || missing+=("ccache")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    printf "\e[31mError: Missing build dependencies:\e[0m\n"
+    printf "  - %s\n" "${missing[@]}"
+    print_dependency_install_hint "build"
+    return 1
+  fi
+}
+
+verify_build_prerequisites() {
+  check_runtime_dependencies
+  check_build_dependencies
+}
+
+verify_prebuilt_prerequisites() {
+  require_command curl
+  check_runtime_dependencies
 }
 
 prepare_install_dirs() {
@@ -113,7 +223,8 @@ install_component_files() {
 }
 
 prompt_install_approval() {
-  printf "\n\e[36mBuild artifacts are ready.\e[0m\n"
+  local artifacts_label="$1"
+  printf "\n\e[36m%s are ready.\e[0m\n" "$artifacts_label"
   printf "\e[36mProceed with copying files and enabling/starting services? [y/N]: \e[0m"
 
   local answer
@@ -127,6 +238,57 @@ prompt_install_approval() {
       exit 0
       ;;
   esac
+}
+
+detect_linux_arch() {
+  local raw_arch
+  raw_arch="$(uname -m)"
+
+  case "$raw_arch" in
+    x86_64)
+      printf "x86_64"
+      ;;
+    aarch64|arm64)
+      printf "arm64"
+      ;;
+    *)
+      printf "\e[31mError: Unsupported architecture: %s\e[0m\n" "$raw_arch" >&2
+      return 1
+      ;;
+  esac
+}
+
+download_prebuilt_binary() {
+  local component_name="$1"
+  local component_dir="$2"
+  local binary_name="$3"
+  local release_arch="$4"
+
+  local release_asset_name="${binary_name}-linux-${release_arch}"
+  local output_binary="$component_dir/dist/$binary_name"
+  local release_json
+  local download_url
+
+  printf "\n\e[34mFetching prebuilt %s (%s)...\e[0m\n" "$component_name" "$release_arch"
+
+  release_json="$(curl -fsSL "$RELEASE_API_URL")"
+  download_url="$(printf "%s" "$release_json" | grep -Eo "\"browser_download_url\": \"[^\"]*${release_asset_name}\"" | cut -d '"' -f 4)"
+
+  if [[ -z "$download_url" ]]; then
+    printf "\e[31mError: Could not find release asset '%s' in latest release.\e[0m\n" "$release_asset_name"
+    return 1
+  fi
+
+  mkdir -p "$component_dir/dist"
+  curl -fL "$download_url" -o "$output_binary"
+  chmod +x "$output_binary"
+
+  if [[ ! -f "$output_binary" ]]; then
+    printf "\e[31mError: Download verification failed at %s\e[0m\n" "$output_binary"
+    return 1
+  fi
+
+  printf "\e[32mDownload verification passed: %s\e[0m\n" "$output_binary"
 }
 
 enable_and_start_services() {
@@ -150,10 +312,35 @@ enable_and_start_services() {
   done
 }
 
+print_usage_examples() {
+  local selection="$1"
+
+  printf "\n\e[34mQuick usage examples\e[0m\n"
+
+  if [[ "$selection" == "1" || "$selection" == "3" ]]; then
+    printf "\n\e[36mTTS (bash):\e[0m\n"
+    printf "  %s/neuro-tts-trigger speak \"Hello from NeuroPipe\"\n" "$LOCAL_BIN_DIR"
+    printf "  %s/neuro-tts-trigger stop\n" "$LOCAL_BIN_DIR"
+    printf "  systemctl --user status neuropipe-tts.service\n"
+  fi
+
+  if [[ "$selection" == "2" || "$selection" == "3" ]]; then
+    printf "\n\e[36mSTT (bash):\e[0m\n"
+    printf "  text=\$(%s/neuro-stt-trigger) && printf 'Heard: %%s\\n' \"\$text\"\n" "$LOCAL_BIN_DIR"
+    printf "  systemctl --user status neuropipe-stt.service\n"
+
+    printf "\n\e[36mHyprland example binding:\e[0m\n"
+    printf "  bind = SUPER, V, exec, bash -lc 'text=\$(%s/neuro-stt-trigger); [ -n \"\$text\" ] && wtype -d 5 \"\$text\"'\n" "$LOCAL_BIN_DIR"
+
+    printf "\n\e[36mNiri example binding:\e[0m\n"
+    printf "  Mod+V { spawn \"bash\" \"-lc\" \"text=\$(%s/neuro-stt-trigger); [ -n \\\"\$text\\\" ] && wtype -d 5 \\\"\$text\\\"\"; }\n" "$LOCAL_BIN_DIR"
+  fi
+}
+
 run_build_flow() {
   local selection="$1"
 
-  verify_prerequisites
+  verify_build_prerequisites
   SERVICE_UNITS=()
 
   case "$selection" in
@@ -173,7 +360,7 @@ run_build_flow() {
       ;;
   esac
 
-  prompt_install_approval
+  prompt_install_approval "Build artifacts"
   prepare_install_dirs
 
   case "$selection" in
@@ -192,6 +379,54 @@ run_build_flow() {
   enable_and_start_services
 
   printf "\n\e[32mBuild and installation finished successfully.\e[0m\n"
+  print_usage_examples "$selection"
+}
+
+run_prebuilt_flow() {
+  local selection="$1"
+  local release_arch
+
+  verify_prebuilt_prerequisites
+  release_arch="$(detect_linux_arch)"
+  SERVICE_UNITS=()
+
+  case "$selection" in
+    1)
+      download_prebuilt_binary "TTS Service" "$TTS_DIR" "neuro-tts-service" "$release_arch"
+      ;;
+    2)
+      download_prebuilt_binary "STT Service" "$STT_DIR" "neuro-stt-service" "$release_arch"
+      ;;
+    3)
+      download_prebuilt_binary "TTS Service" "$TTS_DIR" "neuro-tts-service" "$release_arch"
+      download_prebuilt_binary "STT Service" "$STT_DIR" "neuro-stt-service" "$release_arch"
+      ;;
+    *)
+      printf "\e[31mUnknown prebuilt selection: %s\e[0m\n" "$selection"
+      return 1
+      ;;
+  esac
+
+  prompt_install_approval "Downloaded binaries"
+  prepare_install_dirs
+
+  case "$selection" in
+    1)
+      install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
+      ;;
+    2)
+      install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
+      ;;
+    3)
+      install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
+      install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
+      ;;
+  esac
+
+  enable_and_start_services
+
+  printf "\n\e[32mPrebuilt installation finished successfully.\e[0m\n"
+  print_usage_examples "$selection"
 }
 
 select_build_targets() {
@@ -240,6 +475,52 @@ select_build_targets() {
   done
 }
 
+select_prebuilt_targets() {
+  clear_screen
+  print_header
+  print_description
+  printf "\n\e[36mWhich prebuilt binaries would you like to install?\e[0m\n"
+
+  select _choice in "TTS only" "STT only" "Both TTS and STT" "Back"; do
+    case "${REPLY}" in
+      1)
+        clear_screen
+        print_header
+        print_description
+        if run_prebuilt_flow 1; then
+          return 0
+        fi
+        printf "\n\e[33mPrebuilt install failed. Returning to prebuilt menu.\e[0m\n"
+        ;;
+      2)
+        clear_screen
+        print_header
+        print_description
+        if run_prebuilt_flow 2; then
+          return 0
+        fi
+        printf "\n\e[33mPrebuilt install failed. Returning to prebuilt menu.\e[0m\n"
+        ;;
+      3)
+        clear_screen
+        print_header
+        print_description
+        if run_prebuilt_flow 3; then
+          return 0
+        fi
+        printf "\n\e[33mPrebuilt install failed. Returning to prebuilt menu.\e[0m\n"
+        ;;
+      4)
+        clear_screen
+        return 1
+        ;;
+      *)
+        printf "\e[31mInvalid option. Please choose 1, 2, 3, or 4.\e[0m\n"
+        ;;
+    esac
+  done
+}
+
 select_install_mode() {
   while true; do
     clear_screen
@@ -257,11 +538,11 @@ select_install_mode() {
           fi
           ;;
         2)
-          clear_screen
-          print_header
-          printf "\n\e[33mSelected: Use prebuilt binaries\e[0m\n"
-          printf "\e[33mTODO: Prebuilt binary install flow will be added next.\e[0m\n"
-          return 0
+          if select_prebuilt_targets; then
+            return 0
+          else
+            break
+          fi
           ;;
         3)
           clear_screen
