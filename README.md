@@ -72,11 +72,16 @@ printf 'Heard: %s\n' "$text"
 ~/.local/bin/neuro-tts-trigger stop
 ```
 
-## Hyprland Integration (Voice Typing)
-Add this to `~/.config/hypr/hyprland.conf`:
+## Hyprland Integration
+Add these bindings to `~/.config/hypr/hyprland.conf`:
 
 ```ini
-bind = SUPER, V, exec, bash -lc 'text=$($HOME/.local/bin/neuro-stt-trigger); [ -n "$text" ] && wtype -d 5 "$text"'
+# Neuro STT
+bind = SUPER, L, exec, bash -lc 'text=$($HOME/.local/bin/neuro-stt-trigger); [ -n "$text" ] && wtype -d 5 "$text"'
+
+# Neuro TTS
+bind = CTRL, R, exec, bash -lc '$HOME/.local/bin/neuro-tts-trigger speak "$(wl-paste)"'
+bind = CTRL SHIFT, R, exec, ~/.local/bin/neuro-tts-trigger stop
 ```
 
 ## Niri Integration
@@ -84,5 +89,10 @@ bind = SUPER, V, exec, bash -lc 'text=$($HOME/.local/bin/neuro-stt-trigger); [ -
 Add this style of binding to your Niri config:
 
 ```kdl
-Mod+V { spawn "bash" "-lc" "text=$($HOME/.local/bin/neuro-stt-trigger); [ -n \"$text\" ] && wtype -d 5 \"$text\""; }
+// Neuro STT
+Mod+L { spawn "bash" "-c" "text=$($HOME/.local/bin/neuro-stt-trigger); wtype -d 5 \"$text\""; }
+
+// Neuro TTS
+Ctrl+R { spawn "bash" "-c" "$HOME/.local/bin/neuro-tts-trigger speak \"$(wl-paste)\""; }
+Ctrl+Shift+R { spawn "~/.local/bin/neuro-tts-trigger" "stop"; }
 ```
