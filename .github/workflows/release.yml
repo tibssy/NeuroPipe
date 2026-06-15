@@ -59,13 +59,35 @@ jobs:
           cp tts-client/dist/neuro-tts-trigger tts-client/dist/neuro-tts-trigger-linux-${{ matrix.arch }}
           cp stt-client/dist/neuro-stt-trigger stt-client/dist/neuro-stt-trigger-linux-${{ matrix.arch }}
 
-      - name: Upload binaries to GitHub release
-        uses: softprops/action-gh-release@v2
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: Release ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
-          files: |
+          name: neuropipe-linux-${{ matrix.arch }}
+          path: |
             tts-service/dist/neuro-tts-service-linux-${{ matrix.arch }}
             stt-service/dist/neuro-stt-service-linux-${{ matrix.arch }}
             tts-client/dist/neuro-tts-trigger-linux-${{ matrix.arch }}
             stt-client/dist/neuro-stt-trigger-linux-${{ matrix.arch }}
+
+  publish-release:
+    needs: build-linux
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: neuropipe-linux-*
+          merge-multiple: true
+
+      - name: Publish release with changelog
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/*
