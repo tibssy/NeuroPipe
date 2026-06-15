@@ -1,0 +1,71 @@
+name: Release NeuroPipe
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runner }}
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y patchelf espeak-ng
+
+      - name: Build TTS service
+        working-directory: tts-service
+        run: chmod +x build.sh && ./build.sh
+
+      - name: Build STT service
+        working-directory: stt-service
+        run: chmod +x build.sh && ./build.sh
+
+      - name: Build TTS client
+        working-directory: tts-client
+        run: chmod +x build.sh && ./build.sh
+
+      - name: Build STT client
+        working-directory: stt-client
+        run: chmod +x build.sh && ./build.sh
+
+      - name: Rename binaries with architecture suffix
+        run: |
+          cp tts-service/dist/neuro-tts-service tts-service/dist/neuro-tts-service-linux-${{ matrix.arch }}
+          cp stt-service/dist/neuro-stt-service stt-service/dist/neuro-stt-service-linux-${{ matrix.arch }}
+          cp tts-client/dist/neuro-tts-trigger tts-client/dist/neuro-tts-trigger-linux-${{ matrix.arch }}
+          cp stt-client/dist/neuro-stt-trigger stt-client/dist/neuro-stt-trigger-linux-${{ matrix.arch }}
+
+      - name: Upload binaries to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            tts-service/dist/neuro-tts-service-linux-${{ matrix.arch }}
+            stt-service/dist/neuro-stt-service-linux-${{ matrix.arch }}
+            tts-client/dist/neuro-tts-trigger-linux-${{ matrix.arch }}
+            stt-client/dist/neuro-stt-trigger-linux-${{ matrix.arch }}
