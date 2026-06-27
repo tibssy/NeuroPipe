@@ -7,6 +7,7 @@ import gc
 
 # Engine Imports
 from engines.kokoro import KokoroEngine
+from engines.pocket_tts import PocketTTSEngine
 # from engines.piper import PiperEngine
 
 # --- CONFIG ---
@@ -30,6 +31,7 @@ class TTSService:
         # Engines
         self.engines = {
             "kokoro": KokoroEngine(),
+            "pocket-tts": PocketTTSEngine(),
             # "piper": PiperEngine()
         }
         self.active_engine = None
@@ -123,8 +125,14 @@ class TTSService:
 
                 voice = msg.get("voice", "af_bella")
                 speed = msg.get("speed", 1.0)
+                quality = msg.get("quality")
 
                 self._switch_engine(engine)
+
+                # Apply quality setting if engine supports it
+                if quality and hasattr(self.active_engine, "set_precision"):
+                    self.active_engine.set_precision(quality)
+
                 self.cmd_socket.send_json({"status": "queued"})
 
                 # Generate and Queue
