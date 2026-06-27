@@ -8,7 +8,11 @@ uv run python -m nuitka --onefile \
   --include-data-files="$SITE_PACKAGES/language_tags/data/json/registry.json"=language_tags/data/json/registry.json \
   --include-data-dir="$SITE_PACKAGES/espeakng_loader/espeak-ng-data"=espeakng_loader/espeak-ng-data \
   --include-data-files="$SITE_PACKAGES/espeakng_loader/libespeak-ng.so"=espeakng_loader/libespeak-ng.so \
+  --include-distribution-metadata=huggingface-hub \
   --include-distribution-metadata=kokoro-onnx \
+  --include-distribution-metadata=onnxruntime \
+  --include-distribution-metadata=safetensors \
+  --include-distribution-metadata=sentencepiece \
   --output-dir=dist \
   --output-filename=neuro-tts-service \
   --assume-yes-for-downloads \
