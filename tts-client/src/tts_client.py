@@ -56,6 +56,9 @@ def main():
     p_speak.add_argument("--voice", type=str, default="af_heart",
                          help="Voice ID")
     p_speak.add_argument("--speed", type=float, default=1.0, help="Speed")
+    p_speak.add_argument("--quality", type=str, default=None,
+                         choices=["int8", "fp32"],
+                         help="Engine quality (int8=faster, fp32=higher quality, pocket-tts only)")
     p_speak.add_argument("--engine", type=str, default="kokoro",
                          help="Engine (kokoro/piper)")
 
@@ -77,13 +80,16 @@ def main():
     t.start()
 
     if args.action == "speak":
-        send_command({
+        cmd = {
             "command": "speak",
             "text": args.text,
             "voice": args.voice,
             "speed": args.speed,
-            "engine": args.engine
-        })
+            "engine": args.engine,
+        }
+        if args.quality:
+            cmd["quality"] = args.quality
+        send_command(cmd)
         # Keep alive briefly to receive events
         try:
             input("\nPress Enter to exit (or wait for speech to finish)...\n")
