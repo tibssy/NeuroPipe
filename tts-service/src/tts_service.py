@@ -130,8 +130,8 @@ class TTSService:
                 self._switch_engine(engine)
 
                 # Apply quality setting if engine supports it
-                if quality and hasattr(self.active_engine, "set_precision"):
-                    self.active_engine.set_precision(quality)
+                if quality and hasattr(self.active_engine, "set_quality"):
+                    self.active_engine.set_quality(quality)
 
                 self.cmd_socket.send_json({"status": "queued"})
 

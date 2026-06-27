@@ -57,8 +57,8 @@ def main():
                          help="Voice ID")
     p_speak.add_argument("--speed", type=float, default=1.0, help="Speed")
     p_speak.add_argument("--quality", type=str, default=None,
-                         choices=["int8", "fp32"],
-                         help="Engine quality (int8=faster, fp32=higher quality, pocket-tts only)")
+                         choices=["low", "high"],
+                         help="Quality: low=faster, high=better audio")
     p_speak.add_argument("--engine", type=str, default="kokoro",
                          help="Engine (kokoro/piper)")
 
