@@ -38,6 +38,74 @@ def _update(state, result, manifest, offset):
         state[e["input_name"]] = result[offset + e["index"]]
 
 
+MAX_TOKEN_PER_CHUNK = 50
+
+
+def _find_boundary_indices(tokens, boundary_tokens):
+    indices = [0]
+    prev_boundary = False
+    for idx, token in enumerate(tokens):
+        if token in boundary_tokens:
+            prev_boundary = True
+        else:
+            if prev_boundary:
+                indices.append(idx)
+            prev_boundary = False
+    indices.append(len(tokens))
+    return indices
+
+
+def _segments_from_boundaries(tokens, indices, tokenizer):
+    segments = []
+    for i in range(len(indices) - 1):
+        text = tokenizer.Decode(tokens[indices[i]:indices[i + 1]])
+        segments.append((indices[i + 1] - indices[i], text))
+    return segments
+
+
+def _split_into_best_sentences(text, tokenizer):
+    prepared = text.strip()
+    tokens = tokenizer.Encode(prepared)
+
+    eos_tokens = set(tokenizer.Encode(".!...?")[1:])
+    boundaries = _find_boundary_indices(tokens, eos_tokens)
+    segments = _segments_from_boundaries(tokens, boundaries, tokenizer)
+
+    fallback_tokens = set(tokenizer.Encode(",;:")[1:])
+    refined = []
+    for count, seg_text in segments:
+        if count <= MAX_TOKEN_PER_CHUNK:
+            refined.append((count, seg_text))
+            continue
+        sub_tokens = tokenizer.Encode(seg_text.strip())
+        sub_bounds = _find_boundary_indices(sub_tokens, fallback_tokens)
+        sub_segs = _segments_from_boundaries(sub_tokens, sub_bounds, tokenizer)
+        if len(sub_segs) > 1:
+            refined.extend(sub_segs)
+        else:
+            refined.append((count, seg_text))
+
+    chunks = []
+    cur_text = ""
+    cur_count = 0
+    for count, seg_text in refined:
+        if not cur_text:
+            cur_text = seg_text
+            cur_count = count
+            continue
+        if cur_count + count > MAX_TOKEN_PER_CHUNK:
+            chunks.append(cur_text.strip())
+            cur_text = seg_text
+            cur_count = count
+        else:
+            cur_text += " " + seg_text
+            cur_count += count
+    if cur_text:
+        chunks.append(cur_text.strip())
+
+    return chunks
+
+
 def _load_voice_state(path, manifest):
     with safe_open(path, framework="np") as f:
         raw = {}
@@ -111,7 +179,6 @@ def _predefined_voices():
 def _pocket_tts_worker(input_queue, output_queue, precision="int8"):
     """Runs in a separate process. Loads models, generates audio."""
     try:
-        import pysbd
         import sentencepiece as spm
 
         _ensure_bundle()
@@ -147,8 +214,6 @@ def _pocket_tts_worker(input_queue, output_queue, precision="int8"):
 
         output_queue.put(("READY", None))
 
-        segmenter = pysbd.Segmenter(language="en", clean=True)
-
         while True:
             try:
                 task = input_queue.get(timeout=1)
@@ -171,12 +236,9 @@ def _pocket_tts_worker(input_queue, output_queue, precision="int8"):
                 continue
 
             # --- Sentence-level generation ---
-            sentences = segmenter.segment(text)
+            chunks = _split_into_best_sentences(text, tok)
 
-            for sentence in sentences:
-                sentence = sentence.strip()
-                if not sentence:
-                    continue
+            for sentence in chunks:
 
                 ids = np.array(tok.Encode(sentence), dtype=np.int64).reshape(1, -1)
                 te = tc.run(None, {"token_ids": ids})[0]
