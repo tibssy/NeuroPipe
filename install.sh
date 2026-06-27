@@ -11,11 +11,6 @@ STT_DIR="$ROOT_DIR/stt-service"
 TTS_CLIENT_DIR="$ROOT_DIR/tts-client"
 STT_CLIENT_DIR="$ROOT_DIR/stt-client"
 RELEASE_API_URL="https://api.github.com/repos/tibssy/NeuroPipe/releases/latest"
-KOKORO_MODEL_DIR="$HOME/.local/share/neuropipe/models/kokoro"
-KOKORO_MODEL_FILE="kokoro-v1.0.onnx"
-KOKORO_VOICES_FILE="voices-v1.0.bin"
-KOKORO_MODEL_URL="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.fp16.onnx"
-KOKORO_VOICES_URL="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 declare -a SERVICE_UNITS=()
 PKG_MANAGER=""
@@ -244,35 +239,6 @@ install_client_binary() {
   printf "\e[32mInstalled binary: %s\e[0m\n" "$LOCAL_BIN_DIR/$binary_name"
 }
 
-ensure_kokoro_models() {
-  local selection="$1"
-  local model_path="$KOKORO_MODEL_DIR/$KOKORO_MODEL_FILE"
-  local voices_path="$KOKORO_MODEL_DIR/$KOKORO_VOICES_FILE"
-
-  if [[ "$selection" != "1" && "$selection" != "3" ]]; then
-    return 0
-  fi
-
-  require_command curl
-  mkdir -p "$KOKORO_MODEL_DIR"
-
-  if [[ ! -f "$model_path" ]]; then
-    printf "\n\e[34mDownloading Kokoro model...\e[0m\n"
-    curl -fL "$KOKORO_MODEL_URL" -o "$model_path"
-    printf "\e[32mSaved model: %s\e[0m\n" "$model_path"
-  else
-    printf "\e[32mKokoro model already present: %s\e[0m\n" "$model_path"
-  fi
-
-  if [[ ! -f "$voices_path" ]]; then
-    printf "\n\e[34mDownloading Kokoro voices...\e[0m\n"
-    curl -fL "$KOKORO_VOICES_URL" -o "$voices_path"
-    printf "\e[32mSaved voices: %s\e[0m\n" "$voices_path"
-  else
-    printf "\e[32mKokoro voices already present: %s\e[0m\n" "$voices_path"
-  fi
-}
-
 prompt_install_approval() {
   local artifacts_label="$1"
   printf "\n\e[36m%s are ready.\e[0m\n" "$artifacts_label"
@@ -413,7 +379,6 @@ run_build_flow() {
 
   prompt_install_approval "Build artifacts"
   prepare_install_dirs
-  ensure_kokoro_models "$selection"
 
   case "$selection" in
     1)
@@ -465,7 +430,6 @@ run_prebuilt_flow() {
 
   prompt_install_approval "Downloaded binaries"
   prepare_install_dirs
-  ensure_kokoro_models "$selection"
 
   case "$selection" in
     1)
