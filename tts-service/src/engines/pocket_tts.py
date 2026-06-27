@@ -158,6 +158,7 @@ def _ensure_bundle():
 
 
 PRECISION_SUFFIXES = {"int8": "_int8.onnx", "fp32": ".onnx"}
+QUALITY_PRECISION_MAP = {"low": "int8", "high": "fp32"}
 
 
 def _model_path(stem, precision="int8"):
@@ -353,6 +354,11 @@ class PocketTTSEngine(TTSEngine):
             raise ValueError(f"precision must be 'int8' or 'fp32', got '{precision}'")
         self.unload()
         self.precision = precision
+
+    def set_quality(self, quality):
+        if quality not in ("low", "high"):
+            raise ValueError(f"quality must be 'low' or 'high', got '{quality}'")
+        self.set_precision(QUALITY_PRECISION_MAP[quality])
 
     def generate(self, text, voice, speed):
         if speed != 1.0:
