@@ -3,7 +3,6 @@ import math
 import multiprocessing
 import os
 import queue
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -104,6 +103,14 @@ def _split_into_best_sentences(text, tokenizer):
         chunks.append(cur_text.strip())
 
     return chunks
+
+
+def _change_speed(audio, speed):
+    if speed == 1.0:
+        return audio
+    new_len = int(len(audio) / speed)
+    indices = np.linspace(0, len(audio) - 1, new_len)
+    return np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
 
 
 def _load_voice_state(path, manifest):
@@ -224,7 +231,7 @@ def _pocket_tts_worker(input_queue, output_queue, precision="int8"):
             if task is None:
                 break
 
-            text, voice, _speed = task
+            text, voice, speed = task
 
             # --- Resolve voice state ---
             if voice in predefined:
@@ -292,6 +299,7 @@ def _pocket_tts_worker(input_queue, output_queue, precision="int8"):
                     _update(ms, r, mm, 1)
 
                 audio = np.concatenate(audio_chunks)
+                audio = _change_speed(audio, speed)
                 output_queue.put(("AUDIO", (audio, sr, sentence)))
 
             output_queue.put(("DONE", None))
@@ -361,9 +369,6 @@ class PocketTTSEngine(TTSEngine):
         self.set_precision(QUALITY_PRECISION_MAP[quality])
 
     def generate(self, text, voice, speed):
-        if speed != 1.0:
-            warnings.warn("PocketTTS: speed parameter not supported, ignoring.")
-
         if not self.process or not self.process.is_alive():
             self.load()
 
