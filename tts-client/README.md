@@ -22,16 +22,30 @@ uv sync
 
 ## Run from source
 
-### Speak text
+### Speak text (Kokoro, default)
 
 ```bash
-uv run python src/tts_client.py speak "Testing NeuroPipe speech"
+uv run python src/tts_client.py speak "Hello from NeuroPipe"
 ```
 
-### Use custom voice/speed/engine
+### Speak text (Pocket TTS)
 
 ```bash
-uv run python src/tts_client.py speak "Fast sample" --voice af_bella --speed 1.15 --engine kokoro
+uv run python src/tts_client.py speak "Hello" --engine pocket-tts --voice alba
+```
+
+### Custom voice, speed, quality
+
+```bash
+uv run python src/tts_client.py speak "Fast sample" --voice af_bella --speed 1.15 --engine kokoro --quality high
+```
+
+### Pocket TTS voices
+
+Available: `alba`, `azelma`, `cosette`, `eponine`, `fantine`, `javert`, `jean`, `marius`
+
+```bash
+uv run python src/tts_client.py speak "Bonjour" --engine pocket-tts --voice cosette --speed 1.0 --quality low
 ```
 
 ### Stop playback
@@ -45,6 +59,15 @@ uv run python src/tts_client.py stop
 ```bash
 uv run python src/tts_client.py monitor
 ```
+
+## CLI options
+
+| Flag | Description | Default |
+|---|---|---|
+| `--engine` | TTS engine (`kokoro` or `pocket-tts`) | `kokoro` |
+| `--voice` | Voice name | `af_bella` (kokoro) / `alba` (pocket-tts) |
+| `--speed` | Playback speed (0.5–2.0) | `1.0` |
+| `--quality` | Audio quality (`low` or `high`) | `low` |
 
 ## Build standalone binary
 

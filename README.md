@@ -72,6 +72,20 @@ printf 'Heard: %s\n' "$text"
 ~/.local/bin/neuro-tts-trigger stop
 ```
 
+### TTS engine selection
+
+Two engines available: `kokoro` (default) and `pocket-tts`. Models auto-download on first use.
+
+```bash
+~/.local/bin/neuro-tts-trigger speak "Hello" --engine pocket-tts --voice alba
+~/.local/bin/neuro-tts-trigger speak "Hello" --engine kokoro --voice af_bella --speed 1.15 --quality high
+```
+
+- `--engine`: `kokoro` or `pocket-tts`
+- `--voice`: engine-specific voice name
+- `--speed`: playback speed (0.5–2.0)
+- `--quality`: `low` (faster) or `high` (better quality)
+
 ## Hyprland Integration
 Add these bindings to `~/.config/hypr/hyprland.conf`:
 
