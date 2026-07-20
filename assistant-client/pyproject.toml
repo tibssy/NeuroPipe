@@ -1,0 +1,11 @@
+[project]
+name = "assistant-client"
+version = "0.1.0"
+description = "NeuroPipe Assistant CLI Client"
+readme = "README.md"
+requires-python = ">=3.13, <3.14"
+dependencies = [
+    "nuitka>=2.8.9",
+    "pyzmq>=27.1.0",
+    "zstandard>=0.25.0",
+]
