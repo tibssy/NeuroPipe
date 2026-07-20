@@ -1,0 +1,13 @@
+[project]
+name = "assistant-service"
+version = "0.1.0"
+description = "NeuroPipe Assistant Service — STT → Ollama → TTS voice assistant daemon"
+readme = "README.md"
+requires-python = ">=3.13, <3.14"
+dependencies = [
+    "nuitka>=2.8.9",
+    "ollama>=0.6.1",
+    "notify-py>=0.3.4",
+    "pyzmq>=27.1.0",
+    "zstandard>=0.25.0",
+]
