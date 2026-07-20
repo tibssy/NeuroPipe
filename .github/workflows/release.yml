@@ -52,12 +52,22 @@ jobs:
         working-directory: stt-client
         run: chmod +x build.sh && ./build.sh
 
+      - name: Build Assistant service
+        working-directory: assistant-service
+        run: chmod +x build.sh && ./build.sh
+
+      - name: Build Assistant client
+        working-directory: assistant-client
+        run: chmod +x build.sh && ./build.sh
+
       - name: Rename binaries with architecture suffix
         run: |
           cp tts-service/dist/neuro-tts-service tts-service/dist/neuro-tts-service-linux-${{ matrix.arch }}
           cp stt-service/dist/neuro-stt-service stt-service/dist/neuro-stt-service-linux-${{ matrix.arch }}
           cp tts-client/dist/neuro-tts-trigger tts-client/dist/neuro-tts-trigger-linux-${{ matrix.arch }}
           cp stt-client/dist/neuro-stt-trigger stt-client/dist/neuro-stt-trigger-linux-${{ matrix.arch }}
+          cp assistant-service/dist/neuro-assistant-service assistant-service/dist/neuro-assistant-service-linux-${{ matrix.arch }}
+          cp assistant-client/dist/neuro-assistant-client assistant-client/dist/neuro-assistant-client-linux-${{ matrix.arch }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -68,6 +78,8 @@ jobs:
             stt-service/dist/neuro-stt-service-linux-${{ matrix.arch }}
             tts-client/dist/neuro-tts-trigger-linux-${{ matrix.arch }}
             stt-client/dist/neuro-stt-trigger-linux-${{ matrix.arch }}
+            assistant-service/dist/neuro-assistant-service-linux-${{ matrix.arch }}
+            assistant-client/dist/neuro-assistant-client-linux-${{ matrix.arch }}
 
   publish-release:
     needs: build-linux
