@@ -241,6 +241,61 @@ install_client_binary() {
   printf "\e[32mInstalled binary: %s\e[0m\n" "$LOCAL_BIN_DIR/$binary_name"
 }
 
+handle_pocket_tts_voices() {
+  if ! command -v uv &>/dev/null || [[ ! -d "$TTS_DIR" ]]; then
+    return 0
+  fi
+
+  printf "\n\e[36mPre-download pocket-tts voice embeddings? [y/N]: \e[0m"
+  local answer
+  read -r answer
+  if [[ ! "$answer" =~ ^[yY] ]]; then
+    printf "\n\e[33mCustom voices: pass --voice /path/to/voice.safetensors to neuro-tts-trigger\e[0m\n"
+    return 0
+  fi
+
+  uv run --directory "$TTS_DIR" python3 -c "
+import json, os, sys
+from huggingface_hub import HfApi, hf_hub_download
+
+try:
+    HfApi().whoami()
+except Exception:
+    print()
+    print('Not authenticated with HuggingFace.')
+    print('Predefined voices (alba, cosette, ...) require:')
+    print('  1. Visit https://huggingface.co/kyutai/pocket-tts -> accept terms')
+    print('  2. Run: huggingface-cli login')
+    print('  3. Re-run this installer')
+    print()
+    print('Or use custom safetensors:')
+    print('  neuro-tts-trigger speak \"...\" --engine pocket-tts --voice /path/to/voice.safetensors')
+    sys.exit(1)
+
+BUNDLE = 'english_2026-04'
+try:
+    bundle_path = hf_hub_download(repo_id='KevinAHM/pocket-tts-onnx', filename=f'onnx/{BUNDLE}/bundle.json')
+    voices = list(json.load(open(bundle_path)).get('predefined_voices', []))
+except Exception as e:
+    print(f'Error reading bundle metadata: {e}')
+    sys.exit(1)
+
+if not voices:
+    print('No predefined voices found.')
+    sys.exit(0)
+
+print(f'Downloading {len(voices)} voice embeddings...')
+for v in voices:
+    print(f'  {v}... ', end='', flush=True)
+    try:
+        hf_hub_download(repo_id='kyutai/pocket-tts', filename=f'languages/{BUNDLE}/embeddings/{v}.safetensors')
+        print('OK')
+    except Exception as e:
+        print(f'FAILED ({e})')
+print('Done.')
+"
+}
+
 prompt_install_approval() {
   local artifacts_label="$1"
   printf "\n\e[36m%s are ready.\e[0m\n" "$artifacts_label"
@@ -422,6 +477,10 @@ run_build_flow() {
 
   enable_and_start_services
 
+  if [[ "$selection" == "1" || "$selection" == "4" ]]; then
+    handle_pocket_tts_voices
+  fi
+
   printf "\n\e[32mBuild and installation finished successfully.\e[0m\n"
   print_usage_examples "$selection"
 }
@@ -488,6 +547,10 @@ run_prebuilt_flow() {
   esac
 
   enable_and_start_services
+
+  if [[ "$selection" == "1" || "$selection" == "4" ]]; then
+    handle_pocket_tts_voices
+  fi
 
   printf "\n\e[32mPrebuilt installation finished successfully.\e[0m\n"
   print_usage_examples "$selection"
