@@ -2,6 +2,10 @@
 
 Voice assistant daemon for NeuroPipe. Connects STT → Ollama → TTS into a conversational loop, controllable via ZeroMQ IPC.
 
+## Requirements
+
+- [Ollama](https://ollama.com) — must be installed, running, and have the target model pulled
+
 ## What this service does
 
 - Exposes command socket: `ipc:///tmp/neuropipe_assistant_cmd.sock`
@@ -25,8 +29,18 @@ Voice assistant daemon for NeuroPipe. Connects STT → Ollama → TTS into a con
 
 ## Usage
 
+### Run directly (development)
+
 ```bash
 # Start a session (use PYTHONUNBUFFERED=1 when running in background)
 PYTHONUNBUFFERED=1 uv run python src/assistant_service.py
 PYTHONUNBUFFERED=1 uv run python src/assistant_service.py --model llama3.2:3b
+```
+
+### Run as installed systemd service
+
+```bash
+# After install via ./install.sh
+systemctl --user enable --now neuropipe-assistant.service
+journalctl --user -u neuropipe-assistant.service -f
 ```

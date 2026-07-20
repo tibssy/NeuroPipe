@@ -4,6 +4,7 @@
 
 > **Architecture:**  
 > Microphone → [Silero VAD] → [Parakeet TDT Model] → **ZeroMQ Pub/Sub** → Clients (Shell, Assistant, Scripts)
+> Voice Loop: STT → **Ollama** → TTS (via Assistant Service)
 
 ## Features
 *   **Zero Latency:** Uses Unix Domain Sockets (IPC) for instant communication.
@@ -23,7 +24,7 @@ cd NeuroPipe
 
 Use the root installer script. It provides interactive menus for:
 
-- build from source (`TTS only`, `STT only`, or `both`)
+- build from source (`TTS`, `STT`, `Assistant`, or `All services`)
 - use prebuilt Linux binaries (`x86_64` or `arm64`, auto-detected)
 - safe confirmation before copying files and enabling services
 
@@ -54,6 +55,7 @@ It also checks required dependencies and prints package-manager-specific install
 ```bash
 systemctl --user status neuropipe-stt.service
 systemctl --user status neuropipe-tts.service
+systemctl --user status neuropipe-assistant.service
 ```
 
 ## Quick usage
@@ -86,6 +88,33 @@ Two engines available: `kokoro` (default) and `pocket-tts`. Models auto-download
 - `--speed`: playback speed (0.5–2.0)
 - `--quality`: `low` (faster) or `high` (better quality)
 
+### Assistant (STT + Ollama + TTS)
+
+Requires [Ollama](https://ollama.com) installed and running with a model pulled.
+
+Two modes:
+- **MODE1** — interruptable only by IPC `interrupt` command
+- **MODE2** — interruptable by IPC `interrupt` or new voice input
+
+```bash
+# Start voice assistant session (MODE2 with voice interrupt)
+~/.local/bin/neuro-assistant-client mode2 --model gemma4:cloud
+
+# Start with custom TTS voice
+~/.local/bin/neuro-assistant-client mode1 --model llama3.2:3b --engine kokoro --voice af_bella
+
+# Interrupt current response (stays in session)
+~/.local/bin/neuro-assistant-client interrupt
+
+# Stop session entirely
+~/.local/bin/neuro-assistant-client stop
+
+# Check service state
+~/.local/bin/neuro-assistant-client get_state
+```
+
+> Note: The `--model` flag is required. If omitted the service defaults to `gemma4:cloud`.
+
 ## Hyprland Integration
 Add these bindings to `~/.config/hypr/hyprland.conf`:
 
@@ -96,6 +125,10 @@ bind = SUPER, L, exec, bash -lc 'text=$($HOME/.local/bin/neuro-stt-trigger); [ -
 # Neuro TTS
 bind = CTRL, R, exec, bash -lc '$HOME/.local/bin/neuro-tts-trigger speak "$(wl-paste)"'
 bind = CTRL SHIFT, R, exec, ~/.local/bin/neuro-tts-trigger stop
+
+# Neuro Assistant
+bind = SUPER, Period, exec, $HOME/.local/bin/neuro-assistant-client mode2 --model gemma4:cloud
+bind = SUPER, comma, exec, $HOME/.local/bin/neuro-assistant-client interrupt
 ```
 
 ## Niri Integration
@@ -109,4 +142,8 @@ Mod+L { spawn "bash" "-c" "text=$($HOME/.local/bin/neuro-stt-trigger); wtype -d 
 // Neuro TTS
 Ctrl+R { spawn "bash" "-c" "$HOME/.local/bin/neuro-tts-trigger speak \"$(wl-paste)\""; }
 Ctrl+Shift+R { spawn "~/.local/bin/neuro-tts-trigger" "stop"; }
+
+// Neuro Assistant
+Mod+. { spawn "~/.local/bin/neuro-assistant-client" "mode2" "--model" "gemma4:cloud"; }
+Mod+, { spawn "~/.local/bin/neuro-assistant-client" "interrupt"; }
 ```

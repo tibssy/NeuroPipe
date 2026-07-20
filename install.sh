@@ -10,6 +10,8 @@ TTS_DIR="$ROOT_DIR/tts-service"
 STT_DIR="$ROOT_DIR/stt-service"
 TTS_CLIENT_DIR="$ROOT_DIR/tts-client"
 STT_CLIENT_DIR="$ROOT_DIR/stt-client"
+ASSISTANT_DIR="$ROOT_DIR/assistant-service"
+ASSISTANT_CLIENT_DIR="$ROOT_DIR/assistant-client"
 RELEASE_API_URL="https://api.github.com/repos/tibssy/NeuroPipe/releases/latest"
 
 declare -a SERVICE_UNITS=()
@@ -334,14 +336,14 @@ print_usage_examples() {
 
   printf "\n\e[34mQuick usage examples\e[0m\n"
 
-  if [[ "$selection" == "1" || "$selection" == "3" ]]; then
+  if [[ "$selection" == "1" || "$selection" == "4" ]]; then
     printf "\n\e[36mTTS (bash):\e[0m\n"
     printf "  %s/neuro-tts-trigger speak \"Hello from NeuroPipe\"\n" "$LOCAL_BIN_DIR"
     printf "  %s/neuro-tts-trigger stop\n" "$LOCAL_BIN_DIR"
     printf "  systemctl --user status neuropipe-tts.service\n"
   fi
 
-  if [[ "$selection" == "2" || "$selection" == "3" ]]; then
+  if [[ "$selection" == "2" || "$selection" == "4" ]]; then
     printf "\n\e[36mSTT (bash):\e[0m\n"
     printf "  text=\$(%s/neuro-stt-trigger) && printf 'Heard: %%s\\n' \"\$text\"\n" "$LOCAL_BIN_DIR"
     printf "  systemctl --user status neuropipe-stt.service\n"
@@ -351,6 +353,17 @@ print_usage_examples() {
 
     printf "\n\e[36mNiri example binding:\e[0m\n"
     printf "  Mod+V { spawn \"bash\" \"-lc\" \"text=\$(%s/neuro-stt-trigger); [ -n \\\"\$text\\\" ] && wtype -d 5 \\\"\$text\\\"\"; }\n" "$LOCAL_BIN_DIR"
+  fi
+
+  if [[ "$selection" == "3" || "$selection" == "4" ]]; then
+    printf "\n\e[36mAssistant (bash):\e[0m\n"
+    printf "  %s/neuro-assistant-client mode2 --model gemma4:cloud\n" "$LOCAL_BIN_DIR"
+    printf "  %s/neuro-assistant-client interrupt\n" "$LOCAL_BIN_DIR"
+    printf "  systemctl --user status neuropipe-assistant.service\n"
+
+    printf "\n\e[36mHyprland example binding:\e[0m\n"
+    printf "  bind = SUPER, Period, exec, %s/neuro-assistant-client mode2 --model gemma4:cloud\n" "$LOCAL_BIN_DIR"
+    printf "  bind = SUPER, comma, exec, %s/neuro-assistant-client interrupt\n" "$LOCAL_BIN_DIR"
   fi
 }
 
@@ -368,8 +381,12 @@ run_build_flow() {
       build_component "STT Service" "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
       ;;
     3)
+      build_component "Assistant Service" "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
+      ;;
+    4)
       build_component "TTS Service" "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
       build_component "STT Service" "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
+      build_component "Assistant Service" "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
       ;;
     *)
       printf "\e[31mUnknown build selection: %s\e[0m\n" "$selection"
@@ -383,13 +400,23 @@ run_build_flow() {
   case "$selection" in
     1)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
+      install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
       ;;
     2)
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
+      install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
       ;;
     3)
+      install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
+      install_client_binary "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client"
+      ;;
+    4)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
+      install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
+      install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
+      install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
+      install_client_binary "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client"
       ;;
   esac
 
@@ -417,10 +444,16 @@ run_prebuilt_flow() {
       download_prebuilt_binary "STT Trigger" "$STT_CLIENT_DIR" "neuro-stt-trigger" "$release_arch"
       ;;
     3)
+      download_prebuilt_binary "Assistant Service" "$ASSISTANT_DIR" "neuro-assistant-service" "$release_arch"
+      download_prebuilt_binary "Assistant Client" "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client" "$release_arch"
+      ;;
+    4)
       download_prebuilt_binary "TTS Service" "$TTS_DIR" "neuro-tts-service" "$release_arch"
       download_prebuilt_binary "TTS Trigger" "$TTS_CLIENT_DIR" "neuro-tts-trigger" "$release_arch"
       download_prebuilt_binary "STT Service" "$STT_DIR" "neuro-stt-service" "$release_arch"
       download_prebuilt_binary "STT Trigger" "$STT_CLIENT_DIR" "neuro-stt-trigger" "$release_arch"
+      download_prebuilt_binary "Assistant Service" "$ASSISTANT_DIR" "neuro-assistant-service" "$release_arch"
+      download_prebuilt_binary "Assistant Client" "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client" "$release_arch"
       ;;
     *)
       printf "\e[31mUnknown prebuilt selection: %s\e[0m\n" "$selection"
@@ -441,10 +474,16 @@ run_prebuilt_flow() {
       install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
       ;;
     3)
+      install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
+      install_client_binary "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client"
+      ;;
+    4)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
       install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
       install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
+      install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
+      install_client_binary "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client"
       ;;
   esac
 
@@ -460,7 +499,7 @@ select_build_targets() {
   print_description
   printf "\n\e[36mWhat would you like to build?\e[0m\n"
 
-  select _choice in "Build TTS" "Build STT" "Build both TTS and STT" "Back"; do
+  select _choice in "Build TTS" "Build STT" "Build Assistant" "Build all services" "Back"; do
     case "${REPLY}" in
       1)
         clear_screen
@@ -491,10 +530,19 @@ select_build_targets() {
         ;;
       4)
         clear_screen
+        print_header
+        print_description
+        if run_build_flow 4; then
+          return 0
+        fi
+        printf "\n\e[33mBuild failed. Returning to build menu.\e[0m\n"
+        ;;
+      5)
+        clear_screen
         return 1
         ;;
       *)
-        printf "\e[31mInvalid option. Please choose 1, 2, 3, or 4.\e[0m\n"
+        printf "\e[31mInvalid option. Please choose 1, 2, 3, 4, or 5.\e[0m\n"
         ;;
     esac
   done
@@ -506,7 +554,7 @@ select_prebuilt_targets() {
   print_description
   printf "\n\e[36mWhich prebuilt binaries would you like to install?\e[0m\n"
 
-  select _choice in "TTS only" "STT only" "Both TTS and STT" "Back"; do
+  select _choice in "TTS only" "STT only" "Assistant only" "All services" "Back"; do
     case "${REPLY}" in
       1)
         clear_screen
@@ -537,10 +585,19 @@ select_prebuilt_targets() {
         ;;
       4)
         clear_screen
+        print_header
+        print_description
+        if run_prebuilt_flow 4; then
+          return 0
+        fi
+        printf "\n\e[33mPrebuilt install failed. Returning to prebuilt menu.\e[0m\n"
+        ;;
+      5)
+        clear_screen
         return 1
         ;;
       *)
-        printf "\e[31mInvalid option. Please choose 1, 2, 3, or 4.\e[0m\n"
+        printf "\e[31mInvalid option. Please choose 1, 2, 3, 4, or 5.\e[0m\n"
         ;;
     esac
   done
