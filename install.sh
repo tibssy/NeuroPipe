@@ -241,19 +241,6 @@ install_client_binary() {
   printf "\e[32mInstalled binary: %s\e[0m\n" "$LOCAL_BIN_DIR/$binary_name"
 }
 
-install_script() {
-  local source="$1"
-  local dest_name="$2"
-
-  if [[ ! -f "$source" ]]; then
-    printf "\e[31mError: Missing script at %s\e[0m\n" "$source"
-    return 1
-  fi
-
-  install -Dm755 "$source" "$LOCAL_BIN_DIR/$dest_name"
-  printf "\e[32mInstalled script: %s\e[0m\n" "$LOCAL_BIN_DIR/$dest_name"
-}
-
 handle_pocket_tts_voices() {
   if ! command -v uv &>/dev/null || [[ ! -d "$TTS_DIR" ]]; then
     return 0
@@ -469,7 +456,6 @@ run_build_flow() {
     1)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
       install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
-      install_script "$TTS_CLIENT_DIR/src/neuro-tts-voice-cycle" "neuro-tts-voice-cycle"
       ;;
     2)
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
@@ -482,7 +468,6 @@ run_build_flow() {
     4)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
       install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
-      install_script "$TTS_CLIENT_DIR/src/neuro-tts-voice-cycle" "neuro-tts-voice-cycle"
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
       install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
       install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
@@ -542,7 +527,6 @@ run_prebuilt_flow() {
     1)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
       install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
-      install_script "$TTS_CLIENT_DIR/src/neuro-tts-voice-cycle" "neuro-tts-voice-cycle"
       ;;
     2)
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
@@ -555,7 +539,6 @@ run_prebuilt_flow() {
     4)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
       install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
-      install_script "$TTS_CLIENT_DIR/src/neuro-tts-voice-cycle" "neuro-tts-voice-cycle"
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
       install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
       install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
