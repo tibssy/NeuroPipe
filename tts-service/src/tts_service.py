@@ -161,7 +161,7 @@ class TTSService:
 
             elif cmd == "get_state":
                 self.cmd_socket.send_json({
-                    "engine": self.active_engine_name or self.default_engine,
+                    "engine": self.default_engine,
                     "voice": self.default_voice,
                     "speed": self.default_speed,
                     "quality": self.default_quality,
@@ -180,7 +180,7 @@ class TTSService:
                 voice_label = os.path.splitext(os.path.basename(self.default_voice))[0]
                 n = Notify()
                 n.title = "NeuroPipe TTS"
-                n.message = f"{self.default_engine} | {voice_label} | {self.default_speed}x | {self.default_quality}"
+                n.message = f"Engine: {self.default_engine}\nVoice: {voice_label}\nSpeed: {self.default_speed}x\nQuality: {self.default_quality}"
                 n.send()
                 self.cmd_socket.send_json({
                     "status": "ok",
