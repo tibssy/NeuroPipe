@@ -66,6 +66,23 @@ def main():
     p_stop = subparsers.add_parser("stop",
                                    help="Interrupt playback immediately")
 
+    # Get State Command
+    p_state = subparsers.add_parser("get_state",
+                                    help="Show current TTS state")
+
+    # Set State Command
+    p_set = subparsers.add_parser("set_state",
+                                  help="Set default TTS parameters")
+    p_set.add_argument("--engine", type=str,
+                       help="Default engine (kokoro/pocket-tts)")
+    p_set.add_argument("--voice", type=str,
+                       help="Default voice")
+    p_set.add_argument("--speed", type=float,
+                       help="Default speed (0.5-2.0)")
+    p_set.add_argument("--quality", type=str,
+                       choices=["low", "high"],
+                       help="Default quality")
+
     # Monitor Command
     p_mon = subparsers.add_parser("monitor", help="Just listen to events")
 
@@ -73,6 +90,23 @@ def main():
 
     if args.action == "monitor":
         listen_to_events()
+        return
+
+    if args.action == "get_state":
+        send_command({"command": "get_state"})
+        return
+
+    if args.action == "set_state":
+        cmd = {"command": "set_state"}
+        if args.engine:
+            cmd["engine"] = args.engine
+        if args.voice:
+            cmd["voice"] = args.voice
+        if args.speed is not None:
+            cmd["speed"] = args.speed
+        if args.quality:
+            cmd["quality"] = args.quality
+        send_command(cmd)
         return
 
     # start a listener thread to see the output immediately

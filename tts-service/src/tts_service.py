@@ -40,8 +40,14 @@ class TTSService:
         # State
         self.audio_queue = queue.Queue()
         self.interrupt_event = threading.Event()
-        self.current_sentence = ""  # Tracks what is currently being spoken
+        self.current_sentence = ""
         self.last_activity = time.time()
+
+        # Defaults (can be changed via set_state)
+        self.default_engine = "kokoro"
+        self.default_voice = "af_bella"
+        self.default_speed = 1.0
+        self.default_quality = None
 
         # Start Player
         threading.Thread(target=self._player_loop, daemon=True).start()
@@ -121,11 +127,11 @@ class TTSService:
                 self.last_activity = time.time()
                 self.interrupt_event.clear()
                 text = msg.get("text")
-                engine = msg.get("engine", "kokoro")
+                engine = msg.get("engine", self.default_engine)
 
-                voice = msg.get("voice", "af_bella")
-                speed = msg.get("speed", 1.0)
-                quality = msg.get("quality")
+                voice = msg.get("voice", self.default_voice)
+                speed = msg.get("speed", self.default_speed)
+                quality = msg.get("quality", self.default_quality)
 
                 self._switch_engine(engine)
 
@@ -152,8 +158,30 @@ class TTSService:
                                            "last_sentence": self.current_sentence})
 
             elif cmd == "get_state":
-                self.cmd_socket.send_json(
-                    {"active_engine": self.active_engine_name})
+                self.cmd_socket.send_json({
+                    "engine": self.active_engine_name or self.default_engine,
+                    "voice": self.default_voice,
+                    "speed": self.default_speed,
+                    "quality": self.default_quality,
+                    "speaking": not self.audio_queue.empty() or bool(self.current_sentence),
+                })
+
+            elif cmd == "set_state":
+                if "engine" in msg:
+                    self.default_engine = msg["engine"]
+                if "voice" in msg:
+                    self.default_voice = msg["voice"]
+                if "speed" in msg:
+                    self.default_speed = msg["speed"]
+                if "quality" in msg:
+                    self.default_quality = msg["quality"]
+                self.cmd_socket.send_json({
+                    "status": "ok",
+                    "engine": self.default_engine,
+                    "voice": self.default_voice,
+                    "speed": self.default_speed,
+                    "quality": self.default_quality,
+                })
 
 
 if __name__ == "__main__":
