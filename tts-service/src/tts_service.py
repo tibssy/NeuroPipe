@@ -1,3 +1,4 @@
+import os
 import zmq
 import time
 import sounddevice as sd
@@ -176,9 +177,10 @@ class TTSService:
                     self.default_speed = msg["speed"]
                 if "quality" in msg:
                     self.default_quality = msg["quality"]
+                voice_label = os.path.splitext(os.path.basename(self.default_voice))[0]
                 n = Notify()
                 n.title = "NeuroPipe TTS"
-                n.message = f"Engine: {self.default_engine} | Voice: {self.default_voice}"
+                n.message = f"{self.default_engine} | {voice_label} | {self.default_speed}x | {self.default_quality}"
                 n.send()
                 self.cmd_socket.send_json({
                     "status": "ok",
