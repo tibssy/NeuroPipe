@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-import json
 import os
 import subprocess as sp
 import sys
 from glob import glob
 
-TRIGGER = os.path.expanduser("~/.local/bin/neuro-tts-trigger")
+import zmq
+
+CMD_ADDR = "ipc:///tmp/neuropipe_tts_cmd.sock"
 HF_SNAPSHOTS = os.path.expanduser(
     "~/.cache/huggingface/hub/models--kyutai--pocket-tts/snapshots/*/languages/english_2026-04/embeddings"
 )
@@ -16,8 +17,14 @@ def notify(title, message):
     sp.run(["notify-send", title, message], capture_output=True)
 
 
-def run(args):
-    return sp.run(args, capture_output=True, text=True).stdout.strip()
+def send_command(cmd):
+    ctx = zmq.Context()
+    sock = ctx.socket(zmq.REQ)
+    sock.connect(CMD_ADDR)
+    sock.send_json(cmd)
+    reply = sock.recv_json()
+    sock.close()
+    return reply
 
 
 def get_voices():
@@ -28,22 +35,16 @@ def get_voices():
             os.path.splitext(p)[0]
             for p in glob(os.path.join(snapshots[0], "*.safetensors"))
         )
-    custom = sorted(
-        p for p in glob(os.path.join(CUSTOM_DIR, "*.safetensors"))
-    )
+    custom = sorted(p for p in glob(os.path.join(CUSTOM_DIR, "*.safetensors")))
     return predefined + custom
 
 
 def get_current_voice():
-    raw = run([TRIGGER, "get_state"])
-    for line in raw.splitlines():
-        if line.startswith("Reply:"):
-            return json.loads(line[6:]).get("voice", "")
-    return ""
+    return send_command({"command": "get_state"}).get("voice", "")
 
 
 def set_voice(voice):
-    run([TRIGGER, "set_state", "--engine", "pocket-tts", "--voice", voice])
+    send_command({"command": "set_state", "engine": "pocket-tts", "voice": voice})
     label = os.path.splitext(os.path.basename(voice))[0]
     notify("NeuroPipe TTS", f"pocket-tts | {label}")
 
