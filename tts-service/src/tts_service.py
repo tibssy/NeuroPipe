@@ -176,10 +176,10 @@ class TTSService:
                     self.default_speed = msg["speed"]
                 if "quality" in msg:
                     self.default_quality = msg["quality"]
-                Notify(
-                    title="TTS State Updated",
-                    message=f"Engine: {self.default_engine} | Voice: {self.default_voice} | Speed: {self.default_speed} | Quality: {self.default_quality}",
-                ).send()
+                n = Notify()
+                n.title = "NeuroPipe TTS"
+                n.message = f"Engine: {self.default_engine} | Voice: {self.default_voice}"
+                n.send()
                 self.cmd_socket.send_json({
                     "status": "ok",
                     "engine": self.default_engine,
