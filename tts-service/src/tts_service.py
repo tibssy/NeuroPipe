@@ -4,6 +4,7 @@ import sounddevice as sd
 import threading
 import queue
 import gc
+from notifypy import Notify
 
 # Engine Imports
 from engines.kokoro import KokoroEngine
@@ -175,6 +176,10 @@ class TTSService:
                     self.default_speed = msg["speed"]
                 if "quality" in msg:
                     self.default_quality = msg["quality"]
+                Notify(
+                    title="TTS State Updated",
+                    message=f"Engine: {self.default_engine} | Voice: {self.default_voice} | Speed: {self.default_speed} | Quality: {self.default_quality}",
+                ).send()
                 self.cmd_socket.send_json({
                     "status": "ok",
                     "engine": self.default_engine,
