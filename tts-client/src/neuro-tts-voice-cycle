@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+import json
+import os
+import subprocess as sp
+import sys
+from glob import glob
+
+TRIGGER = os.path.expanduser("~/.local/bin/neuro-tts-trigger")
+HF_SNAPSHOTS = os.path.expanduser(
+    "~/.cache/huggingface/hub/models--kyutai--pocket-tts/snapshots/*/languages/english_2026-04/embeddings"
+)
+CUSTOM_DIR = os.path.expanduser("~/.local/share/neuropipe/models/pocket-tts/voices")
+
+
+def notify(title, message):
+    sp.run(["notify-send", title, message], capture_output=True)
+
+
+def run(args):
+    return sp.run(args, capture_output=True, text=True).stdout.strip()
+
+
+def get_voices():
+    snapshots = sorted(glob(HF_SNAPSHOTS))
+    predefined = []
+    if snapshots:
+        predefined = sorted(
+            os.path.splitext(p)[0]
+            for p in glob(os.path.join(snapshots[0], "*.safetensors"))
+        )
+    custom = sorted(
+        p for p in glob(os.path.join(CUSTOM_DIR, "*.safetensors"))
+    )
+    return predefined + custom
+
+
+def get_current_voice():
+    raw = run([TRIGGER, "get_state"])
+    for line in raw.splitlines():
+        if line.startswith("Reply:"):
+            return json.loads(line[6:]).get("voice", "")
+    return ""
+
+
+def set_voice(voice):
+    run([TRIGGER, "set_state", "--engine", "pocket-tts", "--voice", voice])
+    label = os.path.splitext(os.path.basename(voice))[0]
+    notify("NeuroPipe TTS", f"pocket-tts | {label}")
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] not in ("next", "previous"):
+        print("Usage: neuro-tts-voice-cycle {next|previous}")
+        sys.exit(1)
+
+    direction = sys.argv[1]
+    voices = get_voices()
+    if not voices:
+        print("No voices found.")
+        sys.exit(1)
+
+    current = get_current_voice()
+    try:
+        idx = voices.index(current)
+    except ValueError:
+        idx = -1
+
+    if idx == -1:
+        set_voice(voices[0])
+        return
+
+    if direction == "next":
+        idx = (idx + 1) % len(voices)
+    else:
+        idx = (idx - 1) % len(voices)
+
+    set_voice(voices[idx])
+
+
+if __name__ == "__main__":
+    main()
