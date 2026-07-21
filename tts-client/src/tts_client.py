@@ -53,14 +53,15 @@ def main():
     # Speak Command
     p_speak = subparsers.add_parser("speak", help="Send text to TTS")
     p_speak.add_argument("text", type=str, help="Text to speak")
-    p_speak.add_argument("--voice", type=str, default="af_heart",
-                         help="Voice ID")
-    p_speak.add_argument("--speed", type=float, default=1.0, help="Speed")
-    p_speak.add_argument("--quality", type=str, default="high",
+    p_speak.add_argument("--voice", type=str, default=None,
+                         help="Voice ID (default: server preset)")
+    p_speak.add_argument("--speed", type=float, default=None,
+                         help="Speed 0.5-2.0 (default: server preset)")
+    p_speak.add_argument("--quality", type=str, default=None,
                          choices=["low", "high"],
-                         help="Quality: low=faster, high=better audio")
-    p_speak.add_argument("--engine", type=str, default="kokoro",
-                         help="Engine (kokoro/piper)")
+                         help="Quality (default: server preset)")
+    p_speak.add_argument("--engine", type=str, default=None,
+                         help="Engine kokoro/pocket-tts (default: server preset)")
 
     # Stop Command
     p_stop = subparsers.add_parser("stop",
@@ -114,13 +115,13 @@ def main():
     t.start()
 
     if args.action == "speak":
-        cmd = {
-            "command": "speak",
-            "text": args.text,
-            "voice": args.voice,
-            "speed": args.speed,
-            "engine": args.engine,
-        }
+        cmd = {"command": "speak", "text": args.text}
+        if args.engine:
+            cmd["engine"] = args.engine
+        if args.voice:
+            cmd["voice"] = args.voice
+        if args.speed is not None:
+            cmd["speed"] = args.speed
         if args.quality:
             cmd["quality"] = args.quality
         send_command(cmd)
