@@ -47,7 +47,7 @@ class TTSService:
         self.default_engine = "kokoro"
         self.default_voice = "af_bella"
         self.default_speed = 1.0
-        self.default_quality = None
+        self.default_quality = "high"
 
         # Start Player
         threading.Thread(target=self._player_loop, daemon=True).start()

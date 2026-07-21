@@ -56,7 +56,7 @@ def main():
     p_speak.add_argument("--voice", type=str, default="af_heart",
                          help="Voice ID")
     p_speak.add_argument("--speed", type=float, default=1.0, help="Speed")
-    p_speak.add_argument("--quality", type=str, default=None,
+    p_speak.add_argument("--quality", type=str, default="high",
                          choices=["low", "high"],
                          help="Quality: low=faster, high=better audio")
     p_speak.add_argument("--engine", type=str, default="kokoro",
