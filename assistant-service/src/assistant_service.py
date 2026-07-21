@@ -3,9 +3,9 @@ import re
 import os
 import time
 import threading
+import subprocess as sp
 import argparse
 from ollama import chat
-from notifypy import Notify
 
 SENTENCE_END = re.compile(r'[.!?](?:\s|$)')
 
@@ -52,7 +52,7 @@ class AssistantService:
         self.history = [SYSTEM_MESSAGE]
         self.last_activity = time.time()
         self._pending_sentences = 0
-        self._notifier = Notify()
+        sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Starting..."], capture_output=True)
 
     def set_stt_mode(self, mode):
         sock = self.ctx.socket(zmq.REQ)
@@ -184,18 +184,14 @@ class AssistantService:
 
         self.mode = mode
         self.set_stt_mode("VAD")
-        self._notifier.title = "NeuroPipe"
-        self._notifier.message = "Listening"
-        self._notifier.send()
+        sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Listening"], capture_output=True)
 
     def stop(self):
         if self.is_busy():
             self.interrupt()
         self.set_stt_mode("IDLE")
         self.mode = "IDLE"
-        self._notifier.title = "NeuroPipe"
-        self._notifier.message = "Idle"
-        self._notifier.send()
+        sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Idle"], capture_output=True)
 
     def _process_and_respond(self, text):
         self._pending_sentences = 0

@@ -13,7 +13,7 @@ CUSTOM_DIR = os.path.expanduser("~/.local/share/neuropipe/models/pocket-tts/voic
 
 
 def notify(title, message):
-    sp.run(["notify-send", title, message], capture_output=True)
+    sp.run(["notify-send", "-h", "boolean:transient:true", title, message], capture_output=True)
 
 
 def trigger(args):

@@ -5,7 +5,7 @@ import sounddevice as sd
 import threading
 import queue
 import gc
-from notifypy import Notify
+import subprocess as sp
 
 # Engine Imports
 from engines.kokoro import KokoroEngine
@@ -178,10 +178,11 @@ class TTSService:
                 if "quality" in msg:
                     self.default_quality = msg["quality"]
                 voice_label = os.path.splitext(os.path.basename(self.default_voice))[0]
-                n = Notify()
-                n.title = "NeuroPipe TTS"
-                n.message = f"Engine: {self.default_engine}\nVoice: {voice_label}\nSpeed: {self.default_speed}x\nQuality: {self.default_quality}"
-                n.send()
+                sp.run(
+                    ["notify-send", "-h", "boolean:transient:true", "NeuroPipe TTS",
+                     f"{self.default_engine} | {voice_label} | {self.default_speed}x | {self.default_quality}"],
+                    capture_output=True,
+                )
                 self.cmd_socket.send_json({
                     "status": "ok",
                     "engine": self.default_engine,
