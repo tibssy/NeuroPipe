@@ -244,6 +244,9 @@ install_client_binary() {
 handle_pocket_tts_voices() {
   local voices_dir="$HOME/.local/share/neuropipe/models/pocket-tts/voices"
 
+  printf "\n\e[36mPocket-tts voice embeddings are from Kyutai and licensed under CC-BY-4.0.\e[0m\n"
+  printf "\e[36mSee https://github.com/tibssy/NeuroPipe/blob/main/tts-service/VOICE_CREDITS.md\e[0m\n"
+
   if [[ -d "$voices_dir" && "$(ls -A "$voices_dir" 2>/dev/null)" ]]; then
     printf "\n\e[32mVoices already present in %s\e[0m\n" "$voices_dir"
     return 0
