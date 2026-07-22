@@ -3,9 +3,22 @@ import re
 import os
 import time
 import threading
-import subprocess as sp
+import gi
+gi.require_version('Notify', '0.7')
+from gi.repository import Notify
 import argparse
-from ollama import chat
+import httpx
+from ollama import Client
+
+OLLAMA_SOCK = "/tmp/ollama.sock"
+if os.path.exists(OLLAMA_SOCK):
+    _transport = httpx.HTTPTransport(uds=OLLAMA_SOCK)
+    _ollama = Client(transport=_transport)
+else:
+    _ollama = Client()
+
+def chat(*args, **kwargs):
+    return _ollama.chat(*args, **kwargs)
 
 SENTENCE_END = re.compile(r'[.!?](?:\s|$)')
 
@@ -29,6 +42,7 @@ SYSTEM_MESSAGE = {
 
 class AssistantService:
     def __init__(self):
+        Notify.init("NeuroPipe")
         self.ctx = zmq.Context()
 
         self.cmd_socket = self.ctx.socket(zmq.REP)
@@ -65,7 +79,7 @@ class AssistantService:
         self.history = [SYSTEM_MESSAGE]
         self.last_activity = time.time()
         self._pending_sentences = 0
-        sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Starting..."], capture_output=True)
+        Notify.Notification.new("NeuroPipe", "Starting...").show()
 
     def set_stt_mode(self, mode):
         with self.stt_lock:
@@ -218,14 +232,14 @@ class AssistantService:
 
         self.mode = mode
         self.set_stt_mode("VAD")
-        sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Listening"], capture_output=True)
+        Notify.Notification.new("NeuroPipe", "Listening").show()
 
     def stop(self):
         if self.is_busy():
             self.interrupt()
         self.set_stt_mode("IDLE")
         self.mode = "IDLE"
-        sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Idle"], capture_output=True)
+        Notify.Notification.new("NeuroPipe", "Idle").show()
 
     def _process_and_respond(self, text):
         self._pending_sentences = 0
