@@ -106,6 +106,7 @@ class TTSService:
                         {"event": "sentence_done", "sentence": sentence})
 
                 self.audio_queue.task_done()
+                self.current_sentence = ""
                 self.last_activity = time.time()
 
             except queue.Empty:
@@ -169,11 +170,13 @@ class TTSService:
                     print("Interrupt Signal!")
                     self.interrupt_event.set()
 
+                    last_sentence = self.current_sentence
+
                     with self.audio_queue.mutex:
                         self.audio_queue.queue.clear()
 
                     self.cmd_socket.send_json({"status": "stopped",
-                                               "last_sentence": self.current_sentence})
+                                               "last_sentence": last_sentence})
 
                 elif cmd == "get_state":
                     self.cmd_socket.send_json({
