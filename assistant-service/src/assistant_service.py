@@ -166,6 +166,12 @@ class AssistantService:
             self.set_stt_mode("VAD")
         return last_sentence
 
+    def _warm_tts(self):
+        try:
+            self.send_tts_command({"command": "warm"})
+        except zmq.ZMQError:
+            pass
+
     def start_session(self, mode, model=None, engine=None, voice=None):
         if time.time() - self.last_activity > HISTORY_IDLE_TIMEOUT:
             print("Idle > 1h, clearing history.")
@@ -315,6 +321,7 @@ class AssistantService:
 
                     elif event == "listening_start":
                         print(".", end="", flush=True)
+                        threading.Thread(target=self._warm_tts, daemon=True).start()
 
         except KeyboardInterrupt:
             print("\nShutting down...")

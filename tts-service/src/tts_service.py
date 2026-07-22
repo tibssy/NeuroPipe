@@ -178,6 +178,15 @@ class TTSService:
                     self.cmd_socket.send_json({"status": "stopped",
                                                "last_sentence": last_sentence})
 
+                elif cmd == "warm":
+                    engine = msg.get("engine", self.default_engine)
+                    quality = msg.get("quality", self.default_quality)
+                    self._switch_engine(engine)
+                    if quality and hasattr(self.active_engine, "set_quality"):
+                        self.active_engine.set_quality(quality)
+                    self.last_activity = time.time()
+                    self.cmd_socket.send_json({"status": "ok"})
+
                 elif cmd == "get_state":
                     self.cmd_socket.send_json({
                         "engine": self.default_engine,
