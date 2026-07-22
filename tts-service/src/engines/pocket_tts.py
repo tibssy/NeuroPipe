@@ -3,18 +3,16 @@ import math
 import multiprocessing
 import os
 import queue
-from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
-from huggingface_hub import hf_hub_download, snapshot_download
+from huggingface_hub import snapshot_download
 from safetensors import safe_open
 
 from .base import TTSEngine
 
 
 HF_REPO = "KevinAHM/pocket-tts-onnx"
-HF_VOICES_REPO = "kyutai/pocket-tts"
 BUNDLE = "english_2026-04"
 BASE_DIR = os.path.expanduser("~/.local/share/neuropipe/models/pocket-tts")
 BUNDLE_DIR = os.path.join(BASE_DIR, "onnx", BUNDLE)
@@ -145,13 +143,6 @@ def _load_voice_state(path, manifest):
     return state
 
 
-def _download_voice_state(voice_name):
-    return hf_hub_download(
-        repo_id=HF_VOICES_REPO,
-        filename=f"languages/{BUNDLE}/embeddings/{voice_name}.safetensors",
-    )
-
-
 def _ensure_bundle():
     """Download the ONNX bundle if not cached locally."""
     if not os.path.exists(os.path.join(BUNDLE_DIR, "bundle.json")):
@@ -178,12 +169,6 @@ def _model_path(stem, precision="int8"):
     raise FileNotFoundError(f"No model file found for {stem} in {BUNDLE_DIR}")
 
 
-def _predefined_voices():
-    """Return list of predefined voice names from bundle metadata."""
-    meta = json.loads(open(os.path.join(BUNDLE_DIR, "bundle.json")).read())
-    return list(meta.get("predefined_voices", []))
-
-
 def _pocket_tts_worker(input_queue, output_queue, precision="int8"):
     """Runs in a separate process. Loads models, generates audio."""
     try:
@@ -198,7 +183,6 @@ def _pocket_tts_worker(input_queue, output_queue, precision="int8"):
         cd = int(meta["conditioning_dim"])
         fm = meta["flow_lm_state_manifest"]
         mm = meta["mimi_state_manifest"]
-        predefined = list(meta.get("predefined_voices", []))
 
         tok = spm.SentencePieceProcessor()
         tok.Load(os.path.join(BUNDLE_DIR, meta["tokenizer_file"]))
@@ -234,13 +218,13 @@ def _pocket_tts_worker(input_queue, output_queue, precision="int8"):
             text, voice, speed = task
 
             # --- Resolve voice state ---
-            if voice in predefined:
-                voice_path = _download_voice_state(voice)
+            voice_path = os.path.join(BASE_DIR, "voices", f"{voice}.safetensors")
+            if os.path.exists(voice_path):
                 base_state = _load_voice_state(voice_path, fm)
             elif os.path.exists(voice):
                 base_state = _load_voice_state(voice, fm)
             else:
-                output_queue.put(("ERROR", f"Voice '{voice}' not found (not a predefined voice and file does not exist)"))
+                output_queue.put(("ERROR", f"Voice '{voice}' not found"))
                 continue
 
             # --- Sentence-level generation ---
