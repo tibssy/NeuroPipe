@@ -119,77 +119,93 @@ class TTSService:
                     gc.collect()
                     print("System is now in Cold Standby.")
 
+    def _generate_audio(self, text, voice, speed):
+        try:
+            for audio, sr, sent in self.active_engine.generate(text, voice, speed):
+                if self.interrupt_event.is_set():
+                    break
+                self.audio_queue.put((audio, sr, sent))
+        except Exception as e:
+            print(f"[TTS] Generation interrupted: {e}")
+
     def run(self):
         print("TTS Service Running...")
+
+        poller = zmq.Poller()
+        poller.register(self.cmd_socket, zmq.POLLIN)
+
         while True:
-            msg = self.cmd_socket.recv_json()
-            cmd = msg.get("command")
+            socks = dict(poller.poll(timeout=500))
 
-            if cmd == "speak":
-                self.last_activity = time.time()
-                self.interrupt_event.clear()
-                text = msg.get("text")
-                engine = msg.get("engine", self.default_engine)
+            if self.cmd_socket in socks:
+                msg = self.cmd_socket.recv_json()
+                cmd = msg.get("command")
 
-                voice = msg.get("voice", self.default_voice)
-                speed = msg.get("speed", self.default_speed)
-                quality = msg.get("quality", self.default_quality)
+                if cmd == "speak":
+                    self.interrupt_event.set()
+                    self.last_activity = time.time()
+                    text = msg.get("text")
+                    engine = msg.get("engine", self.default_engine)
 
-                self._switch_engine(engine)
+                    voice = msg.get("voice", self.default_voice)
+                    speed = msg.get("speed", self.default_speed)
+                    quality = msg.get("quality", self.default_quality)
 
-                # Apply quality setting if engine supports it
-                if quality and hasattr(self.active_engine, "set_quality"):
-                    self.active_engine.set_quality(quality)
+                    self._switch_engine(engine)
 
-                self.cmd_socket.send_json({"status": "queued"})
+                    if quality and hasattr(self.active_engine, "set_quality"):
+                        self.active_engine.set_quality(quality)
 
-                # Generate and Queue
-                for audio, sr, sent in self.active_engine.generate(text, voice, speed):
-                    if self.interrupt_event.is_set(): break
-                    self.audio_queue.put((audio, sr, sent))
+                    self.interrupt_event.clear()
+                    self.cmd_socket.send_json({"status": "queued"})
 
-            elif cmd == "stop":
-                print("Interrupt Signal!")
-                self.interrupt_event.set()
+                    threading.Thread(
+                        target=self._generate_audio,
+                        args=(text, voice, speed),
+                        daemon=True,
+                    ).start()
 
-                # Clear pending queue
-                with self.audio_queue.mutex:
-                    self.audio_queue.queue.clear()
+                elif cmd == "stop":
+                    print("Interrupt Signal!")
+                    self.interrupt_event.set()
 
-                self.cmd_socket.send_json({"status": "stopped",
-                                           "last_sentence": self.current_sentence})
+                    with self.audio_queue.mutex:
+                        self.audio_queue.queue.clear()
 
-            elif cmd == "get_state":
-                self.cmd_socket.send_json({
-                    "engine": self.default_engine,
-                    "voice": self.default_voice,
-                    "speed": self.default_speed,
-                    "quality": self.default_quality,
-                    "speaking": not self.audio_queue.empty() or bool(self.current_sentence),
-                })
+                    self.cmd_socket.send_json({"status": "stopped",
+                                               "last_sentence": self.current_sentence})
 
-            elif cmd == "set_state":
-                if "engine" in msg:
-                    self.default_engine = msg["engine"]
-                if "voice" in msg:
-                    self.default_voice = msg["voice"]
-                if "speed" in msg:
-                    self.default_speed = msg["speed"]
-                if "quality" in msg:
-                    self.default_quality = msg["quality"]
-                voice_label = os.path.splitext(os.path.basename(self.default_voice))[0]
-                sp.run(
-                    ["notify-send", "-h", "boolean:transient:true", "NeuroPipe TTS",
-                     f"{self.default_engine} | {voice_label} | {self.default_speed}x | {self.default_quality}"],
-                    capture_output=True,
-                )
-                self.cmd_socket.send_json({
-                    "status": "ok",
-                    "engine": self.default_engine,
-                    "voice": self.default_voice,
-                    "speed": self.default_speed,
-                    "quality": self.default_quality,
-                })
+                elif cmd == "get_state":
+                    self.cmd_socket.send_json({
+                        "engine": self.default_engine,
+                        "voice": self.default_voice,
+                        "speed": self.default_speed,
+                        "quality": self.default_quality,
+                        "speaking": not self.audio_queue.empty() or bool(self.current_sentence),
+                    })
+
+                elif cmd == "set_state":
+                    if "engine" in msg:
+                        self.default_engine = msg["engine"]
+                    if "voice" in msg:
+                        self.default_voice = msg["voice"]
+                    if "speed" in msg:
+                        self.default_speed = msg["speed"]
+                    if "quality" in msg:
+                        self.default_quality = msg["quality"]
+                    voice_label = os.path.splitext(os.path.basename(self.default_voice))[0]
+                    sp.run(
+                        ["notify-send", "-h", "boolean:transient:true", "NeuroPipe TTS",
+                         f"{self.default_engine} | {voice_label} | {self.default_speed}x | {self.default_quality}"],
+                        capture_output=True,
+                    )
+                    self.cmd_socket.send_json({
+                        "status": "ok",
+                        "engine": self.default_engine,
+                        "voice": self.default_voice,
+                        "speed": self.default_speed,
+                        "quality": self.default_quality,
+                    })
 
 
 if __name__ == "__main__":
