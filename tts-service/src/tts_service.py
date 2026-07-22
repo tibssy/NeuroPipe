@@ -64,14 +64,33 @@ class TTSService:
         self.active_engine_name = name
 
     def _player_loop(self):
+        stream = None
+        current_sr = None
+
         while True:
             try:
                 # Queue item: (audio_array, sample_rate, sentence_text)
                 chunk, sr, sentence = self.audio_queue.get(timeout=1)
 
                 if self.interrupt_event.is_set():
+                    if stream:
+                        stream.abort(ignore_errors=True)
                     self.audio_queue.task_done()
                     continue
+
+                # (Re)create stream if sample rate changed
+                if sr != current_sr:
+                    if stream:
+                        stream.close()
+                    try:
+                        stream = sd.OutputStream(samplerate=sr, channels=1,
+                                                 dtype='float32')
+                        stream.start()
+                        current_sr = sr
+                    except Exception as e:
+                        print(f"Stream create error: {e}")
+                        self.audio_queue.task_done()
+                        continue
 
                 # Update State & Notify
                 self.current_sentence = sentence
@@ -79,21 +98,13 @@ class TTSService:
                     {"event": "speaking", "sentence": sentence})
 
                 # --- PLAYBACK LOGIC ---
-                try:
-                    with sd.OutputStream(samplerate=sr, channels=1,
-                                         dtype='float32') as stream:
-                        block_size = 2048
-                        total_samples = len(chunk)
-
-                        for i in range(0, total_samples, block_size):
-                            if self.interrupt_event.is_set():
-                                break
-
-                            data_slice = chunk[i: i + block_size]
-                            stream.write(data_slice)
-
-                except Exception as e:
-                    print(f"Playback Error: {e}")
+                if self.interrupt_event.is_set():
+                    stream.abort(ignore_errors=True)
+                else:
+                    try:
+                        stream.write(chunk)
+                    except Exception as e:
+                        print(f"Playback Error: {e}")
 
                 # Check result
                 if self.interrupt_event.is_set():
