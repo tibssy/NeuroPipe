@@ -2,6 +2,8 @@ import zmq
 import sounddevice as sd
 import numpy as np
 import collections
+import queue as _queue
+import threading
 import time
 from pysilero_vad import SileroVoiceActivityDetector
 from engines.parakeet import ParakeetEngine
@@ -48,6 +50,11 @@ class STTService:
         self.running = True
         self.stream = None
 
+        # Async Transcription
+        self.transcription_queue = _queue.Queue()
+        self.result_queue = _queue.Queue()
+        self.engine_lock = threading.Lock()
+
         # Timeout State
         self.last_activity = time.time()
 
@@ -71,16 +78,37 @@ class STTService:
             self.stream.close()
             self.stream = None
 
+    def _transcription_worker(self):
+        while self.running:
+            try:
+                audio = self.transcription_queue.get(timeout=0.1)
+                self.last_activity = time.time()
+                with self.engine_lock:
+                    text = self.engine.transcribe(audio)
+                self.last_activity = time.time()
+                self.result_queue.put(text)
+            except _queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Transcription Worker Error: {e}")
+
     def check_idle_timeout(self):
-        """Checks if we should unload the heavy model"""
-        if self.engine.is_loaded():
-            if time.time() - self.last_activity > MODEL_IDLE_TIMEOUT:
-                print(f"Model idle for {MODEL_IDLE_TIMEOUT}s.")
-                self.engine.unload()
+        """Checks if we should unload the heavy model (non-blocking)."""
+        if not self.engine_lock.acquire(blocking=False):
+            return  # worker is transcribing, skip
+        try:
+            if self.engine.is_loaded():
+                if time.time() - self.last_activity > MODEL_IDLE_TIMEOUT:
+                    print(f"Model idle for {MODEL_IDLE_TIMEOUT}s.")
+                    self.engine.unload()
+        finally:
+            self.engine_lock.release()
 
     def run(self):
         print("NeuroPipe Service Started")
         print(f"Mode: {self.mode}")
+
+        threading.Thread(target=self._transcription_worker, daemon=True).start()
 
         # Audio Buffers
         pre_speech_buffer = collections.deque(maxlen=PRE_RECORD_CHUNKS)
@@ -123,17 +151,11 @@ class STTService:
                     self.last_activity = time.time()
 
                 elif cmd == "manual_stop":
-                    # Force Transcribe logic
                     if recorded_audio:
                         full_audio = np.concatenate(recorded_audio)
-                        text = self.engine.transcribe(full_audio)
-                        if text.strip():
-                            self.pub.send_json({"event": "transcription",
-                                                "text": text.strip()})
-
+                        self.transcription_queue.put(full_audio)
                         self.last_activity = time.time()
 
-                    # Go to IDLE and Close Stream
                     self.mode = "IDLE"
                     self.stop_stream()
                     is_recording = False
@@ -141,6 +163,16 @@ class STTService:
                     self.rep.send_json({"status": "ok"})
 
             except zmq.Again:
+                pass
+
+            # CHECK TRANSCRIPTION RESULTS
+            try:
+                text = self.result_queue.get_nowait()
+                if text.strip():
+                    print(f"> {text}")
+                    self.pub.send_json({"event": "transcription",
+                                        "text": text.strip()})
+            except _queue.Empty:
                 pass
 
             # AUDIO PROCESSING
@@ -182,14 +214,7 @@ class STTService:
                                 recorded_audio) > MAX_RECORDING_CHUNKS:
                             print("Processing...")
                             full_audio = np.concatenate(recorded_audio)
-                            text = self.engine.transcribe(full_audio)
-
-                            if text.strip():
-                                print(f"> {text}")
-                                self.pub.send_json({"event": "transcription",
-                                                    "text": text.strip()})
-
-                            # Update activity
+                            self.transcription_queue.put(full_audio)
                             self.last_activity = time.time()
 
                             is_recording = False
