@@ -58,13 +58,16 @@ class STTService:
         # Timeout State
         self.last_activity = time.time()
 
+    def float32_to_int16_bytes(self, audio_float):
+        return (audio_float * 32767).astype(np.int16).tobytes()
+
     def start_stream(self):
         """Opens the microphone stream"""
         if self.stream is None:
             print("Microphone: ON")
             self.stream = sd.InputStream(samplerate=SAMPLE_RATE,
                                          blocksize=WINDOW_SIZE,
-                                         channels=1, dtype="int16")
+                                         channels=1, dtype="float32")
             self.stream.start()
 
     def stop_stream(self):
@@ -149,7 +152,7 @@ class STTService:
 
                 elif cmd == "manual_stop":
                     if recorded_audio:
-                        full_audio = np.concatenate(recorded_audio).astype(np.float32) / 32767
+                        full_audio = np.concatenate(recorded_audio)
                         self.transcription_queue.put(full_audio)
                         self.last_activity = time.time()
 
@@ -189,7 +192,7 @@ class STTService:
 
                 # --- VAD MODE ---
                 if self.mode == "VAD":
-                    prob = self.vad(chunk.tobytes())
+                    prob = self.vad(self.float32_to_int16_bytes(chunk))
 
                     if not is_recording:
                         pre_speech_buffer.append(chunk)
@@ -210,7 +213,7 @@ class STTService:
                         if silence_counter > MAX_SILENCE_CHUNKS or len(
                                 recorded_audio) > MAX_RECORDING_CHUNKS:
                             print("Processing...")
-                            full_audio = np.concatenate(recorded_audio).astype(np.float32) / 32767
+                            full_audio = np.concatenate(recorded_audio)
                             self.transcription_queue.put(full_audio)
                             self.last_activity = time.time()
 

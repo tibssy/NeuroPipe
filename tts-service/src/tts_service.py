@@ -4,9 +4,7 @@ import time
 import sounddevice as sd
 import threading
 import queue
-import gi
-gi.require_version('Notify', '0.7')
-from gi.repository import Notify
+import subprocess as sp
 
 # Engine Imports
 from engines.kokoro import KokoroEngine
@@ -21,7 +19,6 @@ IDLE_TIMEOUT = 60
 
 class TTSService:
     def __init__(self):
-        Notify.init("NeuroPipe TTS")
         self.ctx = zmq.Context()
 
         # Command Socket (Input)
@@ -217,8 +214,11 @@ class TTSService:
                     if "quality" in msg:
                         self.default_quality = msg["quality"]
                     voice_label = os.path.splitext(os.path.basename(self.default_voice))[0]
-                    Notify.Notification.new("NeuroPipe TTS",
-                        f"{self.default_engine} | {voice_label} | {self.default_speed}x | {self.default_quality}").show()
+                    sp.run(
+                        ["notify-send", "-h", "boolean:transient:true", "NeuroPipe TTS",
+                         f"{self.default_engine} | {voice_label} | {self.default_speed}x | {self.default_quality}"],
+                        capture_output=True,
+                    )
                     self.cmd_socket.send_json({
                         "status": "ok",
                         "engine": self.default_engine,
