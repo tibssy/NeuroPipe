@@ -111,6 +111,12 @@ class AssistantService:
         full_response = ""
         sentence_buffer = ""
 
+        tts_batch_buffer = []
+        tts_batch_chars = 0
+        MAX_BATCH_SENTENCES = 3
+        MAX_BATCH_CHARS = 150
+        is_first = True
+
         try:
             for chunk in chat(
                 model=self.ollama_model,
@@ -132,7 +138,20 @@ class AssistantService:
                             break
                         sentence = sentence_buffer[:m.end()].strip()
                         sentence_buffer = sentence_buffer[m.end():]
-                        self.speak(sentence)
+
+                        if self.mode == "MODE2":
+                            if is_first:
+                                self.speak(sentence)
+                                is_first = False
+                            else:
+                                tts_batch_buffer.append(sentence)
+                                tts_batch_chars += len(sentence)
+                                if len(tts_batch_buffer) >= MAX_BATCH_SENTENCES or tts_batch_chars >= MAX_BATCH_CHARS:
+                                    self.speak(" ".join(tts_batch_buffer))
+                                    tts_batch_buffer.clear()
+                                    tts_batch_chars = 0
+                        else:
+                            self.speak(sentence)
         except Exception as e:
             print(f"\n[Ollama Error: {e}]")
             self.last_activity = time.time()
@@ -148,7 +167,15 @@ class AssistantService:
 
         remaining = sentence_buffer.strip()
         if remaining:
-            self.speak(remaining)
+            if self.cancel_event.is_set():
+                return
+            if self.mode == "MODE2" and tts_batch_buffer:
+                tts_batch_buffer.append(remaining)
+                self.speak(" ".join(tts_batch_buffer))
+            else:
+                self.speak(remaining)
+        elif self.mode == "MODE2" and tts_batch_buffer:
+            self.speak(" ".join(tts_batch_buffer))
 
     def is_busy(self):
         return self.ollama_thread is not None and self.ollama_thread.is_alive()
