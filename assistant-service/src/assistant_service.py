@@ -38,6 +38,25 @@ class AssistantService:
         self.stt_sub.connect(STT_PUB_ADDR)
         self.stt_sub.setsockopt_string(zmq.SUBSCRIBE, "")
 
+        # Persistent STT REQ socket
+        self.stt_cmd_sock = self.ctx.socket(zmq.REQ)
+        self.stt_cmd_sock.setsockopt(zmq.RCVTIMEO, 5000)
+        self.stt_cmd_sock.setsockopt(zmq.LINGER, 0)
+        self.stt_cmd_sock.connect(STT_CMD_ADDR)
+        self.stt_lock = threading.Lock()
+
+        # Persistent TTS REQ socket
+        self.tts_cmd_sock = self.ctx.socket(zmq.REQ)
+        try:
+            self.tts_cmd_sock.setsockopt(zmq.REQ_RELAXED, 1)
+            self.tts_cmd_sock.setsockopt(zmq.REQ_CORRELATE, 1)
+        except AttributeError:
+            pass
+        self.tts_cmd_sock.setsockopt(zmq.RCVTIMEO, 5000)
+        self.tts_cmd_sock.setsockopt(zmq.LINGER, 0)
+        self.tts_cmd_sock.connect(TTS_CMD_ADDR)
+        self.tts_lock = threading.Lock()
+
         self.mode = "IDLE"
         self.ollama_model = DEFAULT_MODEL
 
@@ -49,24 +68,14 @@ class AssistantService:
         sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Starting..."], capture_output=True)
 
     def set_stt_mode(self, mode):
-        sock = self.ctx.socket(zmq.REQ)
-        sock.setsockopt(zmq.RCVTIMEO, 5000)
-        sock.connect(STT_CMD_ADDR)
-        try:
-            sock.send_json({"command": "set_mode", "mode": mode})
-            return sock.recv_json()
-        finally:
-            sock.close()
+        with self.stt_lock:
+            self.stt_cmd_sock.send_json({"command": "set_mode", "mode": mode})
+            return self.stt_cmd_sock.recv_json()
 
     def send_tts_command(self, cmd_dict):
-        sock = self.ctx.socket(zmq.REQ)
-        sock.setsockopt(zmq.RCVTIMEO, 5000)
-        sock.connect(TTS_CMD_ADDR)
-        try:
-            sock.send_json(cmd_dict)
-            return sock.recv_json()
-        finally:
-            sock.close()
+        with self.tts_lock:
+            self.tts_cmd_sock.send_json(cmd_dict)
+            return self.tts_cmd_sock.recv_json()
 
     def stop_tts(self):
         try:
