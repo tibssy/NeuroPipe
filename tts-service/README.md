@@ -89,3 +89,8 @@ Models auto-download from Hugging Face / GitHub on first load. Cache location:
 
 - **Kokoro**: `~/.local/share/neuropipe/models/kokoro/`
 - **Pocket TTS**: `~/.local/share/neuropipe/models/pocket-tts/`
+
+## Licensing & Attribution
+
+Voice embeddings for pocket-tts are from [Kyutai](https://kyutai.org/), licensed under [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/).
+See [VOICE_CREDITS.md](VOICE_CREDITS.md) for full attribution and prohibited-use terms.
