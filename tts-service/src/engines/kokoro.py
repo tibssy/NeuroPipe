@@ -1,8 +1,11 @@
 import os
 import multiprocessing
+from multiprocessing import shared_memory
 import queue
 import urllib.request
 import warnings
+
+import numpy as np
 
 from .base import TTSEngine
 
@@ -66,7 +69,13 @@ def _worker_process(input_queue, output_queue, quality="low"):
 
                 audio, sr = kokoro.create(sentence, voice=voice, speed=speed, lang=lang)
 
-                output_queue.put(("AUDIO", (audio, sr, sentence)))
+                if audio.nbytes > 4096:
+                    shm = shared_memory.SharedMemory(create=True, size=audio.nbytes)
+                    buf = np.ndarray(audio.shape, dtype=audio.dtype, buffer=shm.buf)
+                    buf[:] = audio[:]
+                    output_queue.put(("AUDIO_SHM", (shm.name, audio.shape, audio.dtype, sr, sentence)))
+                else:
+                    output_queue.put(("AUDIO", (audio, sr, sentence)))
 
             output_queue.put(("DONE", None))
 
@@ -140,6 +149,13 @@ class KokoroEngine(TTSEngine):
                 msg_type, payload = self.output_queue.get(timeout=30)
                 if msg_type == "AUDIO":
                     audio, sr, sentence = payload
+                    yield (audio, sr, sentence)
+                elif msg_type == "AUDIO_SHM":
+                    shm_name, shape, dtype, sr, sentence = payload
+                    shm = shared_memory.SharedMemory(name=shm_name)
+                    audio = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
+                    shm.close()
+                    shm.unlink()
                     yield (audio, sr, sentence)
                 elif msg_type == "DONE":
                     break

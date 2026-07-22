@@ -1,6 +1,7 @@
 import json
 import math
 import multiprocessing
+from multiprocessing import shared_memory
 import os
 import queue
 
@@ -284,7 +285,14 @@ def _pocket_tts_worker(input_queue, output_queue, precision="int8"):
 
                 audio = np.concatenate(audio_chunks)
                 audio = _change_speed(audio, speed)
-                output_queue.put(("AUDIO", (audio, sr, sentence)))
+
+                if audio.nbytes > 4096:
+                    shm = shared_memory.SharedMemory(create=True, size=audio.nbytes)
+                    buf = np.ndarray(audio.shape, dtype=audio.dtype, buffer=shm.buf)
+                    buf[:] = audio[:]
+                    output_queue.put(("AUDIO_SHM", (shm.name, audio.shape, audio.dtype, sr, sentence)))
+                else:
+                    output_queue.put(("AUDIO", (audio, sr, sentence)))
 
             output_queue.put(("DONE", None))
 
@@ -363,6 +371,13 @@ class PocketTTSEngine(TTSEngine):
                 msg_type, payload = self.output_queue.get(timeout=30)
                 if msg_type == "AUDIO":
                     audio, sr, sentence = payload
+                    yield (audio, sr, sentence)
+                elif msg_type == "AUDIO_SHM":
+                    shm_name, shape, dtype, sr, sentence = payload
+                    shm = shared_memory.SharedMemory(name=shm_name)
+                    audio = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
+                    shm.close()
+                    shm.unlink()
                     yield (audio, sr, sentence)
                 elif msg_type == "DONE":
                     break
