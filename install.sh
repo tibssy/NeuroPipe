@@ -242,7 +242,10 @@ install_client_binary() {
 }
 
 handle_pocket_tts_voices() {
-  if ! command -v uv &>/dev/null || [[ ! -d "$TTS_DIR" ]]; then
+  local voices_dir="$HOME/.local/share/neuropipe/models/pocket-tts/voices"
+
+  if [[ -d "$voices_dir" && "$(ls -A "$voices_dir" 2>/dev/null)" ]]; then
+    printf "\n\e[32mVoices already present in %s\e[0m\n" "$voices_dir"
     return 0
   fi
 
@@ -254,46 +257,18 @@ handle_pocket_tts_voices() {
     return 0
   fi
 
-  uv run --directory "$TTS_DIR" python3 -c "
-import json, os, sys
-from huggingface_hub import HfApi, hf_hub_download
+  local url="https://github.com/tibssy/NeuroPipe/releases/latest/download/pocket-tts-voices.zip"
+  printf "\n\e[34mDownloading pocket-tts voices...\e[0m\n"
 
-try:
-    HfApi().whoami()
-except Exception:
-    print()
-    print('Not authenticated with HuggingFace.')
-    print('Predefined voices (alba, cosette, ...) require:')
-    print('  1. Visit https://huggingface.co/kyutai/pocket-tts -> accept terms')
-    print('  2. Run: huggingface-cli login')
-    print('  3. Re-run this installer')
-    print()
-    print('Or use custom safetensors:')
-    print('  neuro-tts-trigger speak \"...\" --engine pocket-tts --voice /path/to/voice.safetensors')
-    sys.exit(1)
-
-BUNDLE = 'english_2026-04'
-try:
-    bundle_path = hf_hub_download(repo_id='KevinAHM/pocket-tts-onnx', filename=f'onnx/{BUNDLE}/bundle.json')
-    voices = list(json.load(open(bundle_path)).get('predefined_voices', []))
-except Exception as e:
-    print(f'Error reading bundle metadata: {e}')
-    sys.exit(1)
-
-if not voices:
-    print('No predefined voices found.')
-    sys.exit(0)
-
-print(f'Downloading {len(voices)} voice embeddings...')
-for v in voices:
-    print(f'  {v}... ', end='', flush=True)
-    try:
-        hf_hub_download(repo_id='kyutai/pocket-tts', filename=f'languages/{BUNDLE}/embeddings/{v}.safetensors')
-        print('OK')
-    except Exception as e:
-        print(f'FAILED ({e})')
-print('Done.')
-"
+  mkdir -p "$voices_dir"
+  if curl -fSL "$url" -o /tmp/pocket-tts-voices.zip; then
+    unzip -o /tmp/pocket-tts-voices.zip -d "$voices_dir"
+    rm /tmp/pocket-tts-voices.zip
+    printf "\e[32mVoices downloaded to %s\e[0m\n" "$voices_dir"
+  else
+    printf "\e[31mDownload failed. Check your internet connection or use custom safetensors.\e[0m\n"
+    return 1
+  fi
 }
 
 prompt_install_approval() {
