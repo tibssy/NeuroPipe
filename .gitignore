@@ -33,3 +33,4 @@ temp_*
 build/
 dist/
 *.spec
+Assets.zip
