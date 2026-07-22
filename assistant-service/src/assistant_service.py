@@ -16,9 +16,6 @@ TTS_CMD_ADDR = "ipc:///tmp/neuropipe_tts_cmd.sock"
 TTS_EVENTS_ADDR = "ipc:///tmp/neuropipe_tts_events.sock"
 
 DEFAULT_MODEL = "llama3.2:1b"
-DEFAULT_TTS_ENGINE = "kokoro"
-DEFAULT_TTS_VOICE = "af_bella"
-DEFAULT_TTS_QUALITY = "high"
 HISTORY_IDLE_TIMEOUT = 3600
 
 SYSTEM_MESSAGE = {
@@ -43,9 +40,6 @@ class AssistantService:
 
         self.mode = "IDLE"
         self.ollama_model = DEFAULT_MODEL
-        self.tts_engine = DEFAULT_TTS_ENGINE
-        self.tts_voice = DEFAULT_TTS_VOICE
-        self.tts_quality = DEFAULT_TTS_QUALITY
 
         self.cancel_event = threading.Event()
         self.ollama_thread = None
@@ -84,14 +78,7 @@ class AssistantService:
     def speak(self, text):
         if not text.strip() or self.cancel_event.is_set():
             return None
-        cmd = {
-            "command": "speak",
-            "text": text,
-            "voice": self.tts_voice,
-            "engine": self.tts_engine,
-            "speed": 1.0,
-            "quality": self.tts_quality,
-        }
+        cmd = {"command": "speak", "text": text, "speed": 1.0}
         try:
             reply = self.send_tts_command(cmd)
             self._pending_sentences += 1
@@ -177,10 +164,15 @@ class AssistantService:
 
         if model:
             self.ollama_model = model
+
+        tts_state = {}
         if engine:
-            self.tts_engine = engine
+            tts_state["engine"] = engine
         if voice:
-            self.tts_voice = voice
+            tts_state["voice"] = voice
+        if tts_state:
+            tts_state["command"] = "set_state"
+            self.send_tts_command(tts_state)
 
         self.mode = mode
         self.set_stt_mode("VAD")
@@ -287,12 +279,15 @@ class AssistantService:
                             self.cmd_socket.send_json({"status": "stopped"})
 
                         elif cmd == "get_state":
+                            tts_state = self.send_tts_command({"command": "get_state"})
                             self.cmd_socket.send_json({
                                 "mode": self.mode,
                                 "busy": self.is_busy(),
                                 "model": self.ollama_model,
-                                "engine": self.tts_engine,
-                                "voice": self.tts_voice,
+                                "engine": tts_state.get("engine"),
+                                "voice": tts_state.get("voice"),
+                                "speed": tts_state.get("speed"),
+                                "quality": tts_state.get("quality"),
                             })
                     except Exception as e:
                         print(f"Command error: {e}")

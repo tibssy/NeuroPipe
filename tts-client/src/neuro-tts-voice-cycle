@@ -12,10 +12,6 @@ HF_SNAPSHOTS = os.path.expanduser(
 CUSTOM_DIR = os.path.expanduser("~/.local/share/neuropipe/models/pocket-tts/voices")
 
 
-def notify(title, message):
-    sp.run(["notify-send", "-h", "boolean:transient:true", title, message], capture_output=True)
-
-
 def trigger(args):
     out = sp.run([TRIGGER] + args, capture_output=True, text=True).stdout.strip()
     for line in out.splitlines():
@@ -43,7 +39,6 @@ def get_current_voice():
 def set_voice(voice):
     trigger(["set_state", "--engine", "pocket-tts", "--voice", voice])
     label = os.path.splitext(os.path.basename(voice))[0]
-    notify("NeuroPipe TTS", f"pocket-tts | {label}")
 
 
 def main():
