@@ -274,6 +274,46 @@ handle_pocket_tts_voices() {
   fi
 }
 
+handle_kokoro_models() {
+  local models_dir="$HOME/.local/share/neuropipe/models/kokoro"
+
+  if [[ -f "$models_dir/kokoro-v1.0.fp16.onnx" && -f "$models_dir/voices-v1.0.bin" ]]; then
+    printf "\n\e[32mKokoro models already present in %s\e[0m\n" "$models_dir"
+    return 0
+  fi
+
+  printf "\n\e[36mKokoro TTS model is from thewh1teagle/kokoro-onnx (Apache 2.0 / MIT).\e[0m\n"
+  printf "\e[36mSee https://github.com/thewh1teagle/kokoro-onnx\e[0m\n"
+  printf "\n\e[36mPre-download Kokoro TTS model files (~170MB)? [y/N]: \e[0m"
+  local answer
+  read -r answer
+  if [[ ! "$answer" =~ ^[yY] ]]; then
+    printf "\n\e[33mKokoro engine will fail in the compiled binary — use it only with \`uv run\`\e[0m\n"
+    return 0
+  fi
+
+  local base_url="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+  mkdir -p "$models_dir"
+
+  printf "\n\e[34mDownloading kokoro-v1.0.fp16.onnx (~170MB)...\e[0m\n"
+  if curl -fSL "$base_url/kokoro-v1.0.fp16.onnx" -o "$models_dir/kokoro-v1.0.fp16.onnx"; then
+    printf "\e[32mModel downloaded.\e[0m\n"
+  else
+    printf "\e[31mDownload failed.\e[0m\n"
+    return 1
+  fi
+
+  printf "\n\e[34mDownloading voices-v1.0.bin...\e[0m\n"
+  if curl -fSL "$base_url/voices-v1.0.bin" -o "$models_dir/voices-v1.0.bin"; then
+    printf "\e[32mVoices downloaded.\e[0m\n"
+  else
+    printf "\e[31mDownload failed.\e[0m\n"
+    return 1
+  fi
+
+  printf "\e[32mKokoro models downloaded to %s\e[0m\n" "$models_dir"
+}
+
 prompt_install_approval() {
   local artifacts_label="$1"
   printf "\n\e[36m%s are ready.\e[0m\n" "$artifacts_label"
@@ -457,6 +497,7 @@ run_build_flow() {
 
   if [[ "$selection" == "1" || "$selection" == "4" ]]; then
     handle_pocket_tts_voices
+    handle_kokoro_models
   fi
 
   printf "\n\e[32mBuild and installation finished successfully.\e[0m\n"
@@ -528,6 +569,7 @@ run_prebuilt_flow() {
 
   if [[ "$selection" == "1" || "$selection" == "4" ]]; then
     handle_pocket_tts_voices
+    handle_kokoro_models
   fi
 
   printf "\n\e[32mPrebuilt installation finished successfully.\e[0m\n"

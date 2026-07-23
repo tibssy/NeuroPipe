@@ -2,8 +2,6 @@ import os
 import multiprocessing
 from multiprocessing import shared_memory
 import queue
-import urllib.request
-import warnings
 
 import numpy as np
 
@@ -12,22 +10,19 @@ from .base import TTSEngine
 
 # --- CONFIG ---
 BASE_DIR = os.path.expanduser("~/.local/share/neuropipe/models/kokoro")
-MODEL_BASE_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
-VOICES_URL = f"{MODEL_BASE_URL}/voices-v1.0.bin"
-
 MODEL_FILES = {
     "low": "kokoro-v1.0.fp16.onnx",
     "high": "kokoro-v1.0.onnx",
 }
 
 
-def _ensure_file(filename, url):
+def _ensure_file(filename):
     path = os.path.join(BASE_DIR, filename)
-    if os.path.exists(path):
-        return path
-    print(f"[Kokoro] Downloading {filename}...")
-    os.makedirs(BASE_DIR, exist_ok=True)
-    urllib.request.urlretrieve(url, path)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Model file '{filename}' not found in {BASE_DIR}. "
+            f"Run the install script or manually place the file."
+        )
     return path
 
 
@@ -38,8 +33,8 @@ def _worker_process(input_queue, output_queue, quality="low"):
         from kokoro_onnx import Kokoro
 
         model_file = MODEL_FILES[quality]
-        model_path = _ensure_file(model_file, f"{MODEL_BASE_URL}/{model_file}")
-        voices_path = _ensure_file("voices-v1.0.bin", VOICES_URL)
+        model_path = _ensure_file(model_file)
+        voices_path = _ensure_file("voices-v1.0.bin")
 
         print(f"[Kokoro-Worker] Loading Model ({quality})...")
         kokoro = Kokoro(model_path, voices_path)

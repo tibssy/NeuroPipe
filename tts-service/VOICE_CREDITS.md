@@ -1,4 +1,6 @@
-# Voice Credits
+# Voice and Model Credits
+
+## Pocket-TTS Voices
 
 The pocket-tts voice embeddings distributed with NeuroPipe are from **[Kyutai](https://kyutai.org/)** and licensed under **CC-BY-4.0**.
 
@@ -22,3 +24,15 @@ These voice embeddings must not be used for:
 ## Predefined Voices
 
 alba, anna, azelma, bill_boerst, caro_davy, charles, cosette, eponine, estelle, eve, fantine, george, giovanni, jane, javert, jean, juergen, lola, marius, mary, michael, paul, peter_yearsley, rafael, stuart_bell, vera
+
+## Kokoro TTS Model
+
+The Kokoro ONNX model and voice embeddings are from **[thewh1teagle/kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx)**.
+
+| Component | License |
+|---|---|
+| kokoro-onnx (Python bindings) | MIT |
+| kokoro model weights | Apache 2.0 |
+
+- **kokoro-onnx** by thewh1teagle — https://github.com/thewh1teagle/kokoro-onnx
+- **Kokoro-82M** by hexgrad — https://huggingface.co/hexgrad/Kokoro-82M
