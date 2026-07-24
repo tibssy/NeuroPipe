@@ -69,12 +69,14 @@ pub fn get_state() {
     }
 }
 
-fn cycle_voice(direction: &str) -> Option<String> {
+fn cycle_voice(direction: &str, engine: Option<&str>) -> Option<String> {
     let state = zmq_client::send_cmd(zmq_client::TTS_CMD, &json!({"command": "get_state"})).ok()?;
     let current_voice = state.get("voice").and_then(|v| v.as_str()).unwrap_or("");
-    let _engine = state.get("engine").and_then(|v| v.as_str()).unwrap_or("pocket-tts");
+    let eng = engine.or_else(|| state.get("engine").and_then(|v| v.as_str())).unwrap_or("pocket-tts");
 
-    let reply = zmq_client::send_cmd(zmq_client::TTS_CMD, &json!({"command": "list_voices"})).ok()?;
+    let mut list_cmd = json!({"command": "list_voices"});
+    list_cmd["engine"] = json!(eng);
+    let reply = zmq_client::send_cmd(zmq_client::TTS_CMD, &list_cmd).ok()?;
     let voices = reply.get("voices")?.as_array()?;
     if voices.is_empty() {
         eprintln!("No voices available.");
@@ -102,7 +104,7 @@ fn cycle_voice(direction: &str) -> Option<String> {
 pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, quality: Option<&str>) {
     let resolved_voice = match voice {
         Some("next") | Some("prev") => {
-            match cycle_voice(voice.unwrap()) {
+            match cycle_voice(voice.unwrap(), engine) {
                 Some(v) => {
                     eprintln!("Voice: {}", v);
                     Some(v)
