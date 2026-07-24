@@ -222,10 +222,9 @@ class AssistantService:
     def _unload_other_models(self):
         try:
             running = _ollama.ps()
-            for m in running.get("models", []):
-                name = m.get("name")
-                if name and name != self.ollama_model:
-                    _ollama.generate(model=name, keep_alive=0, prompt="")
+            for m in running.models or []:
+                if m.model and m.model != self.ollama_model:
+                    _ollama.generate(model=m.model, keep_alive=0, prompt="")
         except Exception:
             pass
 
@@ -361,7 +360,7 @@ class AssistantService:
 
                         elif cmd == "list_models":
                             result = _ollama.list()
-                            models = [m["name"] for m in result.get("models", [])]
+                            models = [m.model for m in (result.models or [])]
                             self.cmd_socket.send_json({"models": models})
 
                         elif cmd == "set_model":

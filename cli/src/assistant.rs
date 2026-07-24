@@ -72,6 +72,14 @@ fn cycle_model(direction: &str) -> Option<String> {
     Some(model_names[new_idx].to_string())
 }
 
+pub fn list_models() {
+    let cmd = json!({"command": "list_models"});
+    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+        Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+
 pub fn set_model(model: &str) {
     let resolved = match model {
         "next" | "prev" => match cycle_model(model) {
