@@ -367,9 +367,8 @@ class AssistantService:
                             model = msg.get("model")
                             if model:
                                 self.ollama_model = model
-                            label = self.ollama_model.split(":")[0]
                             sp.run(["notify-send", "-h", "boolean:transient:true",
-                                    "NeuroPipe Assistant", f"Model: {label}"],
+                                    "NeuroPipe Assistant", f"Model: {self.ollama_model}"],
                                    capture_output=True)
                             self.cmd_socket.send_json({"model": self.ollama_model})
 
