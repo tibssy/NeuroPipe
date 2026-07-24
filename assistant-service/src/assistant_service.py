@@ -76,6 +76,14 @@ class AssistantService:
         self.history = [SYSTEM_MESSAGE]
         self.last_activity = time.time()
         self._pending_sentences = 0
+        self._spoken_buffer = []
+        self._spoken_lock = threading.Lock()
+
+        # Persistent TTS events SUB socket
+        self.tts_events_sock = self.ctx.socket(zmq.SUB)
+        self.tts_events_sock.connect(TTS_EVENTS_ADDR)
+        self.tts_events_sock.setsockopt_string(zmq.SUBSCRIBE, "")
+
         sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Starting..."], capture_output=True)
 
     def set_stt_mode(self, mode):
@@ -102,16 +110,21 @@ class AssistantService:
         try:
             reply = self.send_tts_command(cmd)
             self._pending_sentences += 1
+            with self._spoken_lock:
+                self._spoken_buffer.append(text)
             return reply
         except zmq.ZMQError as e:
             print(f"speak error: {e}")
             return None
 
-    def _truncate_history(self, last_spoken):
+    def _truncate_history(self, spoken_sentences, last_spoken=""):
         while self.history and self.history[-1]['role'] == 'user':
             self.history.pop()
-        if last_spoken:
-            self.history.append({'role': 'assistant', 'content': last_spoken})
+        content = " ".join(spoken_sentences)
+        if not content:
+            content = last_spoken
+        if content:
+            self.history.append({'role': 'assistant', 'content': content})
 
     def ask_ollama(self, text):
         print(f"\nYou: {text}")
@@ -198,7 +211,9 @@ class AssistantService:
         reply = self.stop_tts()
         last_sentence = reply.get("last_sentence", "") if reply else ""
         self.ollama_thread.join(timeout=5)
-        self._truncate_history(last_sentence)
+        with self._spoken_lock:
+            spoken = list(self._spoken_buffer)
+        self._truncate_history(spoken, last_sentence)
         self.cancel_event.clear()
         if self.mode == "MODE1":
             self.set_stt_mode("VAD")
@@ -240,14 +255,17 @@ class AssistantService:
 
     def _process_and_respond(self, text):
         self._pending_sentences = 0
+        with self._spoken_lock:
+            self._spoken_buffer = []
 
         if self.mode == "MODE1":
             self.set_stt_mode("IDLE")
-            tts_sock = self.ctx.socket(zmq.SUB)
-            tts_sock.connect(TTS_EVENTS_ADDR)
-            tts_sock.setsockopt_string(zmq.SUBSCRIBE, "")
-        else:
-            tts_sock = None
+            # Drain stale events from persistent socket
+            while True:
+                try:
+                    self.tts_events_sock.recv_json(flags=zmq.NOBLOCK)
+                except zmq.Again:
+                    break
 
         self.ask_ollama(text)
 
@@ -255,13 +273,12 @@ class AssistantService:
             remaining = self._pending_sentences
             while remaining > 0 and not self.cancel_event.is_set():
                 try:
-                    msg = tts_sock.recv_json(flags=zmq.NOBLOCK)
+                    msg = self.tts_events_sock.recv_json(flags=zmq.NOBLOCK)
                     event = msg.get("event")
                     if event in ("sentence_done", "interrupted"):
                         remaining -= 1
                 except zmq.Again:
                     time.sleep(0.05)
-            tts_sock.close()
             self.set_stt_mode("VAD")
 
     def handle_transcription(self, text):
