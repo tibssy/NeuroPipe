@@ -100,6 +100,9 @@ enum AssistantAction {
     Interrupt,
     Stop,
     GetState,
+    SetModel {
+        model: String,
+    },
 }
 
 fn main() {
@@ -135,6 +138,7 @@ fn main() {
             AssistantAction::Interrupt => assistant::interrupt(),
             AssistantAction::Stop => assistant::stop(),
             AssistantAction::GetState => assistant::get_state(),
+            AssistantAction::SetModel { model } => assistant::set_model(&model),
         },
         Commands::Status => status::status(),
     }

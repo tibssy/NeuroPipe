@@ -219,6 +219,16 @@ class AssistantService:
             self.set_stt_mode("VAD")
         return last_sentence
 
+    def _unload_other_models(self):
+        try:
+            running = _ollama.ps()
+            for m in running.get("models", []):
+                name = m.get("name")
+                if name and name != self.ollama_model:
+                    _ollama.generate(model=name, keep_alive=0, prompt="")
+        except Exception:
+            pass
+
     def _warm_tts(self):
         try:
             self.send_tts_command({"command": "warm"})
@@ -226,12 +236,13 @@ class AssistantService:
             pass
 
     def start_session(self, mode, model=None, engine=None, voice=None):
+        if model:
+            self.ollama_model = model
+        self._unload_other_models()
+
         if time.time() - self.last_activity > HISTORY_IDLE_TIMEOUT:
             print("Idle > 1h, clearing history.")
             self.history = [SYSTEM_MESSAGE]
-
-        if model:
-            self.ollama_model = model
 
         tts_state = {}
         if engine:
@@ -347,6 +358,17 @@ class AssistantService:
                         elif cmd == "stop":
                             self.stop()
                             self.cmd_socket.send_json({"status": "stopped"})
+
+                        elif cmd == "list_models":
+                            result = _ollama.list()
+                            models = [m["name"] for m in result.get("models", [])]
+                            self.cmd_socket.send_json({"models": models})
+
+                        elif cmd == "set_model":
+                            model = msg.get("model")
+                            if model:
+                                self.ollama_model = model
+                            self.cmd_socket.send_json({"model": self.ollama_model})
 
                         elif cmd == "get_state":
                             tts_state = self.send_tts_command({"command": "get_state"})
