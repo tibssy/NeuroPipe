@@ -204,6 +204,13 @@ class TTSService:
                         "speaking": not self.audio_queue.empty() or bool(self.current_sentence),
                     })
 
+                elif cmd == "list_voices":
+                    if hasattr(self.active_engine, "list_voices"):
+                        voices = self.active_engine.list_voices()
+                    else:
+                        voices = []
+                    self.cmd_socket.send_json({"voices": voices})
+
                 elif cmd == "set_state":
                     if "engine" in msg:
                         self.default_engine = msg["engine"]

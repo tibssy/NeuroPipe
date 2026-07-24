@@ -133,6 +133,13 @@ class KokoroEngine(TTSEngine):
             self.output_queue = None
             print("[Kokoro] Worker Dead. RAM Reclaimed.")
 
+    def list_voices(self):
+        voices_path = os.path.join(BASE_DIR, "voices-v1.0.bin")
+        if not os.path.exists(voices_path):
+            return []
+        voices = np.load(voices_path, allow_pickle=True)
+        return sorted(voices.keys())
+
     def generate(self, text, voice, speed):
         if not self.process or not self.process.is_alive():
             self.load()

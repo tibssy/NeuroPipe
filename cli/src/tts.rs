@@ -69,10 +69,56 @@ pub fn get_state() {
     }
 }
 
+fn cycle_voice(direction: &str) -> Option<String> {
+    let state = zmq_client::send_cmd(zmq_client::TTS_CMD, &json!({"command": "get_state"})).ok()?;
+    let current_voice = state.get("voice").and_then(|v| v.as_str()).unwrap_or("");
+    let _engine = state.get("engine").and_then(|v| v.as_str()).unwrap_or("pocket-tts");
+
+    let reply = zmq_client::send_cmd(zmq_client::TTS_CMD, &json!({"command": "list_voices"})).ok()?;
+    let voices = reply.get("voices")?.as_array()?;
+    if voices.is_empty() {
+        eprintln!("No voices available.");
+        return None;
+    }
+
+    let voice_names: Vec<&str> = voices.iter().filter_map(|v| v.as_str()).collect();
+
+    let current_base = std::path::Path::new(current_voice)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(current_voice);
+
+    let idx = voice_names.iter().position(|v| *v == current_base);
+    let new_idx = match (idx, direction) {
+        (Some(i), "next") => (i + 1) % voice_names.len(),
+        (Some(i), "prev") => (i + voice_names.len() - 1) % voice_names.len(),
+        (None, "next") | (None, "prev") => 0,
+        _ => return None,
+    };
+
+    Some(voice_names[new_idx].to_string())
+}
+
 pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, quality: Option<&str>) {
+    let resolved_voice = match voice {
+        Some("next") | Some("prev") => {
+            match cycle_voice(voice.unwrap()) {
+                Some(v) => {
+                    eprintln!("Voice: {}", v);
+                    Some(v)
+                }
+                None => {
+                    eprintln!("No voices available.");
+                    return;
+                }
+            }
+        }
+        v => v.map(|s| s.to_string()),
+    };
+
     let mut cmd = json!({"command": "set_state"});
     if let Some(v) = engine { cmd["engine"] = json!(v); }
-    if let Some(v) = voice { cmd["voice"] = json!(v); }
+    if let Some(v) = &resolved_voice { cmd["voice"] = json!(v); }
     if let Some(s) = speed { cmd["speed"] = json!(s); }
     if let Some(q) = quality { cmd["quality"] = json!(q); }
     match zmq_client::send_cmd(zmq_client::TTS_CMD, &cmd) {

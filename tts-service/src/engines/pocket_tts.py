@@ -360,6 +360,13 @@ class PocketTTSEngine(TTSEngine):
             raise ValueError(f"quality must be 'low' or 'high', got '{quality}'")
         self.set_precision(QUALITY_PRECISION_MAP[quality])
 
+    def list_voices(self):
+        voices_dir = os.path.join(BASE_DIR, "voices")
+        if not os.path.isdir(voices_dir):
+            return []
+        files = sorted(f for f in os.listdir(voices_dir) if f.endswith(".safetensors"))
+        return [os.path.splitext(f)[0] for f in files]
+
     def generate(self, text, voice, speed):
         if not self.process or not self.process.is_alive():
             self.load()
