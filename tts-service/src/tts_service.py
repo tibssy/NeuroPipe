@@ -205,8 +205,10 @@ class TTSService:
                     })
 
                 elif cmd == "list_voices":
-                    if hasattr(self.active_engine, "list_voices"):
-                        voices = self.active_engine.list_voices()
+                    engine_name = msg.get("engine", self.default_engine)
+                    engine = self.engines.get(engine_name)
+                    if engine and hasattr(engine, "list_voices"):
+                        voices = engine.list_voices()
                     else:
                         voices = []
                     self.cmd_socket.send_json({"voices": voices})
