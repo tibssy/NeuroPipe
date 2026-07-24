@@ -225,6 +225,12 @@ install_component_files() {
 }
 
 install_cli_binary() {
+  local dist_binary="$CLI_DIR/dist/neuro-ipc"
+  if [[ -f "$dist_binary" ]]; then
+    install -Dm755 "$dist_binary" "$LOCAL_BIN_DIR/neuro-ipc"
+    printf "\e[32mInstalled binary: %s/neuro-ipc\e[0m\n" "$LOCAL_BIN_DIR"
+    return 0
+  fi
   if command -v cargo &>/dev/null; then
     printf "\n\e[34mBuilding neuro-ipc from source...\e[0m\n"
     (cd "$CLI_DIR" && cargo build --release) || {
@@ -233,8 +239,8 @@ install_cli_binary() {
     }
     install -Dm755 "$CLI_DIR/target/release/neuro-ipc" "$LOCAL_BIN_DIR/neuro-ipc"
   else
-    printf "\e[33mRust not installed. Building from source is recommended.\e[0m\n"
-    printf "\e[33mInstall Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\e[0m\n"
+    printf "\e[31mError: no prebuilt binary found and Rust is not installed.\e[0m\n"
+    printf "\e[33mEither install Rust (https://rustup.rs) or use a release with prebuilt binaries.\e[0m\n"
     return 1
   fi
   printf "\e[32mInstalled binary: %s/neuro-ipc\e[0m\n" "$LOCAL_BIN_DIR"
