@@ -8,10 +8,8 @@ SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 
 TTS_DIR="$ROOT_DIR/tts-service"
 STT_DIR="$ROOT_DIR/stt-service"
-TTS_CLIENT_DIR="$ROOT_DIR/tts-client"
-STT_CLIENT_DIR="$ROOT_DIR/stt-client"
 ASSISTANT_DIR="$ROOT_DIR/assistant-service"
-ASSISTANT_CLIENT_DIR="$ROOT_DIR/assistant-client"
+CLI_DIR="$ROOT_DIR/cli"
 RELEASE_API_URL="https://api.github.com/repos/tibssy/NeuroPipe/releases/latest"
 
 declare -a SERVICE_UNITS=()
@@ -226,19 +224,20 @@ install_component_files() {
   printf "\e[32mInstalled service: %s\e[0m\n" "$SYSTEMD_USER_DIR/$unit_name"
 }
 
-install_client_binary() {
-  local component_dir="$1"
-  local binary_name="$2"
-
-  local built_binary="$component_dir/dist/$binary_name"
-
-  if [[ ! -f "$built_binary" ]]; then
-    printf "\e[31mError: Cannot install, missing binary at %s\e[0m\n" "$built_binary"
+install_cli_binary() {
+  if command -v cargo &>/dev/null; then
+    printf "\n\e[34mBuilding neuro-ipc from source...\e[0m\n"
+    (cd "$CLI_DIR" && cargo build --release) || {
+      printf "\e[31mRust build failed. Install Rust via https://rustup.rs\e[0m\n"
+      return 1
+    }
+    install -Dm755 "$CLI_DIR/target/release/neuro-ipc" "$LOCAL_BIN_DIR/neuro-ipc"
+  else
+    printf "\e[33mRust not installed. Building from source is recommended.\e[0m\n"
+    printf "\e[33mInstall Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\e[0m\n"
     return 1
   fi
-
-  install -Dm755 "$built_binary" "$LOCAL_BIN_DIR/$binary_name"
-  printf "\e[32mInstalled binary: %s\e[0m\n" "$LOCAL_BIN_DIR/$binary_name"
+  printf "\e[32mInstalled binary: %s/neuro-ipc\e[0m\n" "$LOCAL_BIN_DIR"
 }
 
 handle_pocket_tts_voices() {
@@ -256,7 +255,7 @@ handle_pocket_tts_voices() {
   local answer
   read -r answer
   if [[ ! "$answer" =~ ^[yY] ]]; then
-    printf "\n\e[33mCustom voices: pass --voice /path/to/voice.safetensors to neuro-tts-trigger\e[0m\n"
+    printf "\n\e[33mCustom voices: neuro-ipc tts set-state --voice /path/to/voice.safetensors\e[0m\n"
     return 0
   fi
 
@@ -419,32 +418,32 @@ print_usage_examples() {
 
   if [[ "$selection" == "1" || "$selection" == "4" ]]; then
     printf "\n\e[36mTTS (bash):\e[0m\n"
-    printf "  %s/neuro-tts-trigger speak \"Hello from NeuroPipe\"\n" "$LOCAL_BIN_DIR"
-    printf "  %s/neuro-tts-trigger stop\n" "$LOCAL_BIN_DIR"
+    printf "  %s/neuro-ipc tts speak \"Hello from NeuroPipe\"\n" "$LOCAL_BIN_DIR"
+    printf "  %s/neuro-ipc tts stop\n" "$LOCAL_BIN_DIR"
     printf "  systemctl --user status neuropipe-tts.service\n"
   fi
 
   if [[ "$selection" == "2" || "$selection" == "4" ]]; then
     printf "\n\e[36mSTT (bash):\e[0m\n"
-    printf "  text=\$(%s/neuro-stt-trigger) && printf 'Heard: %%s\\n' \"\$text\"\n" "$LOCAL_BIN_DIR"
+    printf "  text=\$(%s/neuro-ipc stt trigger) && printf 'Heard: %%s\\n' \"\$text\"\n" "$LOCAL_BIN_DIR"
     printf "  systemctl --user status neuropipe-stt.service\n"
 
     printf "\n\e[36mHyprland example binding:\e[0m\n"
-    printf "  bind = SUPER, V, exec, bash -lc 'text=\$(%s/neuro-stt-trigger); [ -n \"\$text\" ] && wtype -d 5 \"\$text\"'\n" "$LOCAL_BIN_DIR"
+    printf "  bind = SUPER, V, exec, bash -lc 'text=\$(%s/neuro-ipc stt trigger); [ -n \"\$text\" ] && wtype -d 5 \"\$text\"'\n" "$LOCAL_BIN_DIR"
 
     printf "\n\e[36mNiri example binding:\e[0m\n"
-    printf "  Mod+V { spawn \"bash\" \"-lc\" \"text=\$(%s/neuro-stt-trigger); [ -n \\\"\$text\\\" ] && wtype -d 5 \\\"\$text\\\"\"; }\n" "$LOCAL_BIN_DIR"
+    printf "  Mod+V { spawn \"bash\" \"-lc\" \"text=\$(%s/neuro-ipc stt trigger); [ -n \\\"\$text\\\" ] && wtype -d 5 \\\"\$text\\\"\"; }\n" "$LOCAL_BIN_DIR"
   fi
 
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
     printf "\n\e[36mAssistant (bash):\e[0m\n"
-    printf "  %s/neuro-assistant-client mode2 --model gemma4:cloud\n" "$LOCAL_BIN_DIR"
-    printf "  %s/neuro-assistant-client interrupt\n" "$LOCAL_BIN_DIR"
+    printf "  %s/neuro-ipc assistant mode2 --model gemma4:cloud\n" "$LOCAL_BIN_DIR"
+    printf "  %s/neuro-ipc assistant interrupt\n" "$LOCAL_BIN_DIR"
     printf "  systemctl --user status neuropipe-assistant.service\n"
 
     printf "\n\e[36mHyprland example binding:\e[0m\n"
-    printf "  bind = SUPER, Period, exec, %s/neuro-assistant-client mode2 --model gemma4:cloud\n" "$LOCAL_BIN_DIR"
-    printf "  bind = SUPER, comma, exec, %s/neuro-assistant-client interrupt\n" "$LOCAL_BIN_DIR"
+    printf "  bind = SUPER, Period, exec, %s/neuro-ipc assistant mode2 --model gemma4:cloud\n" "$LOCAL_BIN_DIR"
+    printf "  bind = SUPER, comma, exec, %s/neuro-ipc assistant interrupt\n" "$LOCAL_BIN_DIR"
   fi
 }
 
@@ -481,25 +480,20 @@ run_build_flow() {
   case "$selection" in
     1)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
-      install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
       ;;
     2)
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
-      install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
       ;;
     3)
       install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
-      install_client_binary "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client"
       ;;
     4)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
-      install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
-      install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
       install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
-      install_client_binary "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client"
       ;;
   esac
+  install_cli_binary
 
   enable_and_start_services
 
@@ -523,23 +517,21 @@ run_prebuilt_flow() {
   case "$selection" in
     1)
       download_prebuilt_binary "TTS Service" "$TTS_DIR" "neuro-tts-service" "$release_arch"
-      download_prebuilt_binary "TTS Trigger" "$TTS_CLIENT_DIR" "neuro-tts-trigger" "$release_arch"
+      download_prebuilt_binary "CLI" "$CLI_DIR" "neuro-ipc" "$release_arch"
       ;;
     2)
       download_prebuilt_binary "STT Service" "$STT_DIR" "neuro-stt-service" "$release_arch"
-      download_prebuilt_binary "STT Trigger" "$STT_CLIENT_DIR" "neuro-stt-trigger" "$release_arch"
+      download_prebuilt_binary "CLI" "$CLI_DIR" "neuro-ipc" "$release_arch"
       ;;
     3)
       download_prebuilt_binary "Assistant Service" "$ASSISTANT_DIR" "neuro-assistant-service" "$release_arch"
-      download_prebuilt_binary "Assistant Client" "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client" "$release_arch"
+      download_prebuilt_binary "CLI" "$CLI_DIR" "neuro-ipc" "$release_arch"
       ;;
     4)
       download_prebuilt_binary "TTS Service" "$TTS_DIR" "neuro-tts-service" "$release_arch"
-      download_prebuilt_binary "TTS Trigger" "$TTS_CLIENT_DIR" "neuro-tts-trigger" "$release_arch"
       download_prebuilt_binary "STT Service" "$STT_DIR" "neuro-stt-service" "$release_arch"
-      download_prebuilt_binary "STT Trigger" "$STT_CLIENT_DIR" "neuro-stt-trigger" "$release_arch"
       download_prebuilt_binary "Assistant Service" "$ASSISTANT_DIR" "neuro-assistant-service" "$release_arch"
-      download_prebuilt_binary "Assistant Client" "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client" "$release_arch"
+      download_prebuilt_binary "CLI" "$CLI_DIR" "neuro-ipc" "$release_arch"
       ;;
     *)
       printf "\e[31mUnknown prebuilt selection: %s\e[0m\n" "$selection"
@@ -553,25 +545,20 @@ run_prebuilt_flow() {
   case "$selection" in
     1)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
-      install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
       ;;
     2)
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
-      install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
       ;;
     3)
       install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
-      install_client_binary "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client"
       ;;
     4)
       install_component_files "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
-      install_client_binary "$TTS_CLIENT_DIR" "neuro-tts-trigger"
       install_component_files "$STT_DIR" "neuro-stt-service" "neuropipe-stt.service"
-      install_client_binary "$STT_CLIENT_DIR" "neuro-stt-trigger"
       install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
-      install_client_binary "$ASSISTANT_CLIENT_DIR" "neuro-assistant-client"
       ;;
   esac
+  install_cli_binary
 
   enable_and_start_services
 

@@ -123,7 +123,15 @@ class STTService:
                 cmd = msg.get("command")
                 print(f"Cmd: {cmd}")
 
-                if cmd == "set_mode":
+                if cmd == "get_state":
+                    self.rep.send_json({
+                        "mode": self.mode,
+                        "vad_threshold": VAD_THRESHOLD,
+                        "sample_rate": SAMPLE_RATE,
+                        "model": STT_MODEL_NAME,
+                    })
+
+                elif cmd == "set_mode":
                     new_mode = msg.get("mode", "IDLE")
 
                     # Logic: Handle Stream state based on Mode

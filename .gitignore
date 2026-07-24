@@ -34,3 +34,6 @@ build/
 dist/
 *.spec
 Assets.zip
+
+# --- Rust Build Artifacts ---
+cli/target/

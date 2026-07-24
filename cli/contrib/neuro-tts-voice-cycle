@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-import ast
+import json
 import os
 import subprocess as sp
 import sys
 from glob import glob
 
-TRIGGER = os.path.expanduser("~/.local/bin/neuro-tts-trigger")
+IPC = os.path.expanduser("~/.local/bin/neuro-ipc")
 VOICES_DIR = os.path.expanduser("~/.local/share/neuropipe/models/pocket-tts/voices")
 
 
-def trigger(args):
-    out = sp.run([TRIGGER] + args, capture_output=True, text=True).stdout.strip()
-    for line in out.splitlines():
-        if line.startswith("Reply:"):
-            return ast.literal_eval(line[6:])
+def ipc(args):
+    out = sp.run([IPC] + args, capture_output=True, text=True).stdout.strip()
+    if out:
+        return json.loads(out)
     return {}
 
 
@@ -22,11 +21,11 @@ def get_voices():
 
 
 def get_current_voice():
-    return trigger(["get_state"]).get("voice", "")
+    return ipc(["tts", "get-state"]).get("voice", "")
 
 
 def set_voice(voice):
-    trigger(["set_state", "--engine", "pocket-tts", "--voice", voice])
+    ipc(["tts", "set-state", "--engine", "pocket-tts", "--voice", voice])
     label = os.path.splitext(os.path.basename(voice))[0]
     sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe TTS", f"pocket-tts | {label}"], capture_output=True)
 

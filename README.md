@@ -63,15 +63,15 @@ systemctl --user status neuropipe-assistant.service
 ### STT one-shot trigger
 
 ```bash
-text=$(~/.local/bin/neuro-stt-trigger)
+text=$(~/.local/bin/neuro-ipc stt trigger)
 printf 'Heard: %s\n' "$text"
 ```
 
 ### TTS trigger
 
 ```bash
-~/.local/bin/neuro-tts-trigger speak "Hello from NeuroPipe"
-~/.local/bin/neuro-tts-trigger stop
+~/.local/bin/neuro-ipc tts speak "Hello from NeuroPipe"
+~/.local/bin/neuro-ipc tts stop
 ```
 
 ### TTS engine selection
@@ -79,8 +79,8 @@ printf 'Heard: %s\n' "$text"
 Two engines available: `kokoro` (default) and `pocket-tts`. Models auto-download on first use.
 
 ```bash
-~/.local/bin/neuro-tts-trigger speak "Hello" --engine pocket-tts --voice alba
-~/.local/bin/neuro-tts-trigger speak "Hello" --engine kokoro --voice af_bella --speed 1.15 --quality high
+~/.local/bin/neuro-ipc tts speak "Hello" --engine pocket-tts --voice alba
+~/.local/bin/neuro-ipc tts speak "Hello" --engine kokoro --voice af_bella --speed 1.15 --quality high
 ```
 
 - `--engine`: `kokoro` or `pocket-tts`
@@ -100,19 +100,19 @@ Two modes:
 
 ```bash
 # Start voice assistant session (MODE2 with voice interrupt)
-~/.local/bin/neuro-assistant-client mode2 --model gemma4:cloud
+~/.local/bin/neuro-ipc assistant mode2 --model gemma4:cloud
 
 # Start with custom TTS voice
-~/.local/bin/neuro-assistant-client mode1 --model llama3.2:3b --engine kokoro --voice af_bella
+~/.local/bin/neuro-ipc assistant mode1 --model llama3.2:3b --engine kokoro --voice af_bella
 
 # Interrupt current response (stays in session)
-~/.local/bin/neuro-assistant-client interrupt
+~/.local/bin/neuro-ipc assistant interrupt
 
 # Stop session entirely
-~/.local/bin/neuro-assistant-client stop
+~/.local/bin/neuro-ipc assistant stop
 
 # Check service state
-~/.local/bin/neuro-assistant-client get_state
+~/.local/bin/neuro-ipc assistant get-state
 ```
 
 > Note: The `--model` flag is required. If omitted the service defaults to `gemma4:cloud`.
@@ -122,15 +122,15 @@ Add these bindings to `~/.config/hypr/hyprland.conf`:
 
 ```ini
 # Neuro STT
-bind = SUPER, L, exec, bash -lc 'text=$($HOME/.local/bin/neuro-stt-trigger); [ -n "$text" ] && wtype -d 5 "$text"'
+bind = SUPER, L, exec, bash -lc 'text=$($HOME/.local/bin/neuro-ipc stt trigger); [ -n "$text" ] && wtype -d 5 "$text"'
 
 # Neuro TTS
-bind = CTRL, R, exec, bash -lc '$HOME/.local/bin/neuro-tts-trigger speak "$(wl-paste)"'
-bind = CTRL SHIFT, R, exec, ~/.local/bin/neuro-tts-trigger stop
+bind = CTRL, R, exec, bash -lc '$HOME/.local/bin/neuro-ipc tts speak "$(wl-paste)"'
+bind = CTRL SHIFT, R, exec, ~/.local/bin/neuro-ipc tts stop
 
 # Neuro Assistant
-bind = SUPER, Period, exec, $HOME/.local/bin/neuro-assistant-client mode2 --model gemma4:cloud
-bind = SUPER, comma, exec, $HOME/.local/bin/neuro-assistant-client interrupt
+bind = SUPER, Period, exec, $HOME/.local/bin/neuro-ipc assistant mode2 --model gemma4:cloud
+bind = SUPER, comma, exec, $HOME/.local/bin/neuro-ipc assistant interrupt
 ```
 
 ## Niri Integration
@@ -139,13 +139,13 @@ Add this style of binding to your Niri config:
 
 ```kdl
 // Neuro STT
-Mod+L { spawn "bash" "-c" "text=$($HOME/.local/bin/neuro-stt-trigger); wtype -d 5 \"$text\""; }
+Mod+L { spawn "bash" "-c" "text=$($HOME/.local/bin/neuro-ipc stt trigger); wtype -d 5 \"$text\""; }
 
 // Neuro TTS
-Ctrl+R { spawn "bash" "-c" "$HOME/.local/bin/neuro-tts-trigger speak \"$(wl-paste)\""; }
-Ctrl+Shift+R { spawn "~/.local/bin/neuro-tts-trigger" "stop"; }
+Ctrl+R { spawn "bash" "-c" "$HOME/.local/bin/neuro-ipc tts speak \"$(wl-paste)\""; }
+Ctrl+Shift+R {   spawn "~/.local/bin/neuro-ipc" "tts" "stop"; }
 
 // Neuro Assistant
-Mod+. { spawn "~/.local/bin/neuro-assistant-client" "mode2" "--model" "gemma4:cloud"; }
-Mod+, { spawn "~/.local/bin/neuro-assistant-client" "interrupt"; }
+Mod+. {   spawn "~/.local/bin/neuro-ipc" "assistant" "mode2" "--model" "gemma4:cloud"; }
+Mod+, {   spawn "~/.local/bin/neuro-ipc" "assistant" "interrupt"; }
 ```
