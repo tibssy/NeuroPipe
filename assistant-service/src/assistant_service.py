@@ -8,6 +8,8 @@ import subprocess as sp
 import argparse
 from ollama import Client
 
+from tool_manager import ToolManager
+
 OLLAMA_SOCK = "/tmp/ollama.sock"
 if os.path.exists(OLLAMA_SOCK):
     _transport = httpx.HTTPTransport(uds=OLLAMA_SOCK)
@@ -29,13 +31,23 @@ TTS_EVENTS_ADDR = "ipc:///tmp/neuropipe_tts_events.sock"
 DEFAULT_MODEL = "llama3.2:1b"
 HISTORY_IDLE_TIMEOUT = 3600
 
-SYSTEM_MESSAGE = {
-    'role': 'system',
-    'content': (
-        'You are a helpful AI voice assistant. '
-        'Keep answers short and conversational.\n/set nothink'
-    ),
-}
+def _build_system_message(tools: list[dict]) -> dict:
+    parts = [
+        "You are a helpful AI voice assistant.",
+        "Keep answers short and conversational.\n/set nothink",
+    ]
+    if tools:
+        descs = [f"- {t['function']['name']}: {t['function']['description']}" for t in tools]
+        parts.append("")
+        parts.append("You have access to these tools:")
+        parts.extend(descs)
+        parts.append("")
+        parts.append(
+            "When the user asks about something a tool can help with, "
+            "call the appropriate tool automatically. "
+            "Do not ask for permission — just use the tool."
+        )
+    return {'role': 'system', 'content': "\n".join(parts)}
 
 
 class AssistantService:
@@ -73,11 +85,15 @@ class AssistantService:
 
         self.cancel_event = threading.Event()
         self.ollama_thread = None
-        self.history = [SYSTEM_MESSAGE]
+        self.history = [_build_system_message([])]
         self.last_activity = time.time()
         self._pending_sentences = 0
         self._spoken_buffer = []
         self._spoken_lock = threading.Lock()
+
+        # External tool plugins
+        self.tool_manager = ToolManager()
+        self.tool_manager.discover()
 
         # Persistent TTS events SUB socket
         self.tts_events_sock = self.ctx.socket(zmq.SUB)
@@ -103,7 +119,27 @@ class AssistantService:
             print(f"stop_tts error: {e}")
             return {}
 
+    def _strip_markdown(self, text: str) -> str:
+        s = text
+        s = re.sub(r'\[([^\]]*)\]\([^)]+\)', r'\1', s)  # [text](url) -> text
+        s = re.sub(r'!\[([^\]]*)\]\([^)]+\)', r'\1', s)  # ![alt](url) -> alt
+        s = re.sub(r'```[\s\S]*?```', '', s)  # code blocks
+        s = re.sub(r'`([^`]+)`', r'\1', s)  # inline code
+        s = re.sub(r'\*\*([^*]+)\*\*', r'\1', s)  # **bold**
+        s = re.sub(r'\*([^*]+)\*', r'\1', s)  # *italic*
+        s = re.sub(r'__([^_]+)__', r'\1', s)  # __bold__ (greedy would break this)
+        s = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'\1', s)  # _italic_ (word boundaries)
+        s = re.sub(r'~~([^~]+)~~', r'\1', s)  # ~~strikethrough~~
+        s = re.sub(r'^#+\s*', '', s, flags=re.MULTILINE)  # # headings
+        s = re.sub(r'^>\s*', '', s, flags=re.MULTILINE)  # > blockquotes
+        s = re.sub(r'^[-*+]\s+', '', s, flags=re.MULTILINE)  # - list items
+        s = re.sub(r'^\d+\.\s+', '', s, flags=re.MULTILINE)  # 1. list items
+        s = re.sub(r'^[-*_]{3,}\s*$', '', s, flags=re.MULTILINE)  # hr --- *** ___
+        s = re.sub(r'<[^>]+>', '', s)  # <html> or <url>
+        return s.strip()
+
     def speak(self, text):
+        text = self._strip_markdown(text)
         if not text.strip() or self.cancel_event.is_set():
             return None
         cmd = {"command": "speak", "text": text, "speed": 1.0}
@@ -126,14 +162,10 @@ class AssistantService:
         if content:
             self.history.append({'role': 'assistant', 'content': content})
 
-    def ask_ollama(self, text):
-        print(f"\nYou: {text}")
-        print("AI: ", end="", flush=True)
-
-        self.history.append({'role': 'user', 'content': text})
-
+    def _stream_and_speak(self, tools, round_num=0):
         full_response = ""
         sentence_buffer = ""
+        called_tools = []
 
         tts_batch_buffer = []
         tts_batch_chars = 0
@@ -141,12 +173,12 @@ class AssistantService:
         MAX_BATCH_CHARS = 150
         is_first = True
 
+        kwargs = {"model": self.ollama_model, "messages": self.history, "stream": True}
+        if tools and round_num == 0:
+            kwargs["tools"] = tools
+
         try:
-            for chunk in chat(
-                model=self.ollama_model,
-                messages=self.history,
-                stream=True,
-            ):
+            for chunk in chat(**kwargs):
                 if self.cancel_event.is_set():
                     break
 
@@ -176,23 +208,21 @@ class AssistantService:
                                     tts_batch_chars = 0
                         else:
                             self.speak(sentence)
+
+                if chunk.message.tool_calls:
+                    called_tools.extend(chunk.message.tool_calls)
         except Exception as e:
             print(f"\n[Ollama Error: {e}]")
             self.last_activity = time.time()
-            return
+            return None, ""
 
         if self.cancel_event.is_set():
             print("\n[Interrupted]\n")
-            return
+            return None, full_response
 
         print("\n")
-        self.history.append({'role': 'assistant', 'content': full_response})
-        self.last_activity = time.time()
-
         remaining = sentence_buffer.strip()
         if remaining:
-            if self.cancel_event.is_set():
-                return
             if self.mode == "MODE2" and tts_batch_buffer:
                 tts_batch_buffer.append(remaining)
                 self.speak(" ".join(tts_batch_buffer))
@@ -200,6 +230,79 @@ class AssistantService:
                 self.speak(remaining)
         elif self.mode == "MODE2" and tts_batch_buffer:
             self.speak(" ".join(tts_batch_buffer))
+
+        if called_tools:
+            return called_tools, full_response
+
+        self.history.append({'role': 'assistant', 'content': full_response})
+        self.last_activity = time.time()
+        return None, full_response
+
+    def _check_tool_permission(self, name: str) -> str | None:
+        level = self.tool_manager.check(name)
+        if level == "allow":
+            return None
+        if level == "deny":
+            return f"Tool '{name}' is disabled."
+        if self.tool_manager.is_granted(name):
+            return None
+        sp.run(
+            ["notify-send", "-h", "boolean:transient:true",
+             "NeuroPipe Assistant",
+             f"The assistant wants to use '{name}', which requires your permission. To allow, run: neuro-ipc assistant set-tools '{{\"{name}\": \"allow\"}}'"],
+            capture_output=True,
+        )
+        return f"Permission needed: '{name}' is set to ask mode. Tell the user to allow it with set-tools or say 'yes' to grant it for this session."
+
+    def _auto_grant_from_text(self, text: str):
+        lower = text.lower().strip()
+        grants = {"yes", "yeah", "yep", "sure", "ok", "okay", "go ahead", "allow", "grant", "do it", "proceed"}
+        if lower in grants or any(lower.startswith(w) for w in grants):
+            any_granted = False
+            for name in self.tool_manager.list_all():
+                level = self.tool_manager.check(name)
+                if level == "ask" and not self.tool_manager.is_granted(name):
+                    self.tool_manager.grant(name)
+                    any_granted = True
+            return any_granted
+        return False
+
+    def ask_ollama(self, text):
+        print(f"\nYou: {text}")
+
+        if self._auto_grant_from_text(text):
+            print("[Auto-granted permission for all 'ask' tools this session]")
+
+        self.history.append({'role': 'user', 'content': text})
+
+        tools = self.tool_manager.active_definitions() or None
+
+        for round_num in range(3):
+            called_tools, spoken = self._stream_and_speak(tools, round_num)
+            if called_tools is None:
+                return
+
+            if spoken.strip():
+                self.history.append({'role': 'assistant', 'content': spoken})
+
+            for tc in called_tools:
+                name = tc.function.name
+                args = dict(tc.function.arguments or {})
+                print(f"\n[Tool: {name}({args})]")
+                err = self._check_tool_permission(name)
+                if err:
+                    print(f"[Permission denied: {err}]")
+                    self.history.append({'role': 'tool', 'tool_name': name, 'content': f"Error: {err}"})
+                    continue
+                result = self.tool_manager.execute(name, args)
+                print(f"[Result: {result[:200]}]")
+                self.history.append({'role': 'tool', 'tool_name': name, 'content': result})
+
+        self.history.append({'role': 'user', 'content': 'Tell the user you searched but could not find a clear answer to their question.'})
+        _, final = self._stream_and_speak(None)
+        if final.strip():
+            self.history.append({'role': 'assistant', 'content': final})
+        print("\n[Max tool rounds reached]")
 
     def is_busy(self):
         return self.ollama_thread is not None and self.ollama_thread.is_alive()
@@ -238,10 +341,14 @@ class AssistantService:
         if model:
             self.ollama_model = model
         self._unload_other_models()
-
-        if time.time() - self.last_activity > HISTORY_IDLE_TIMEOUT:
+        idle = time.time() - self.last_activity > HISTORY_IDLE_TIMEOUT
+        if idle:
             print("Idle > 1h, clearing history.")
-            self.history = [SYSTEM_MESSAGE]
+        self.tool_manager.reset_session()
+        # Only reset history on first start or idle timeout — preserve on mode switches
+        if idle or len(self.history) <= 1:
+            tools = self.tool_manager.active_definitions()
+            self.history = [_build_system_message(tools)]
 
         tts_state = {}
         if engine:
@@ -257,6 +364,8 @@ class AssistantService:
         sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Listening"], capture_output=True)
 
     def stop(self):
+        self.cancel_event.set()
+        self.stop_tts()
         if self.is_busy():
             self.interrupt()
         self.set_stt_mode("IDLE")
@@ -281,7 +390,7 @@ class AssistantService:
 
         if self.mode == "MODE1":
             remaining = self._pending_sentences
-            while remaining > 0 and not self.cancel_event.is_set():
+            while remaining > 0 and not self.cancel_event.is_set() and self.mode == "MODE1":
                 try:
                     msg = self.tts_events_sock.recv_json(flags=zmq.NOBLOCK)
                     event = msg.get("event")
@@ -289,9 +398,12 @@ class AssistantService:
                         remaining -= 1
                 except zmq.Again:
                     time.sleep(0.05)
-            self.set_stt_mode("VAD")
+            if self.mode == "MODE1":
+                self.set_stt_mode("VAD")
 
     def handle_transcription(self, text):
+        if self.mode not in ("MODE1", "MODE2"):
+            return
         if self.is_busy():
             if self.mode == "MODE1":
                 print("\n[Busy — ignoring new input]")
@@ -371,6 +483,22 @@ class AssistantService:
                                     "NeuroPipe Assistant", f"Model: {self.ollama_model}"],
                                    capture_output=True)
                             self.cmd_socket.send_json({"model": self.ollama_model})
+
+                        elif cmd == "list_tools":
+                            self.cmd_socket.send_json({"tools": self.tool_manager.list_all()})
+
+                        elif cmd == "set_tools":
+                            new_config = msg.get("tools", {})
+                            self.tool_manager.set_config(new_config)
+                            self.cmd_socket.send_json({"tools": self.tool_manager.list_all()})
+
+                        elif cmd == "grant_tool":
+                            tool_name = msg.get("tool", "")
+                            self.tool_manager.grant(tool_name)
+                            self.cmd_socket.send_json({"status": "granted", "tool": tool_name})
+
+                        elif cmd == "deny_tool":
+                            self.cmd_socket.send_json({"status": "denied", "tool": msg.get("tool", "")})
 
                         elif cmd == "get_state":
                             tts_state = self.send_tts_command({"command": "get_state"})

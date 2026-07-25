@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{json, Value};
 use crate::zmq_client;
 
 pub fn start(mode: &str, model: Option<&str>, engine: Option<&str>, voice: Option<&str>) {
@@ -74,6 +74,42 @@ fn cycle_model(direction: &str) -> Option<String> {
 
 pub fn list_models() {
     let cmd = json!({"command": "list_models"});
+    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+        Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+
+pub fn list_tools() {
+    let cmd = json!({"command": "list_tools"});
+    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+        Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+
+pub fn set_tools(config: &str) {
+    let tools: Value = match serde_json::from_str(config) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("Invalid JSON: {}", e); return; }
+    };
+    let cmd = json!({"command": "set_tools", "tools": tools});
+    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+        Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+
+pub fn grant_tool(tool: &str) {
+    let cmd = json!({"command": "grant_tool", "tool": tool});
+    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+        Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+
+pub fn deny_tool(tool: &str) {
+    let cmd = json!({"command": "deny_tool", "tool": tool});
     match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),

@@ -246,6 +246,40 @@ install_cli_binary() {
   printf "\e[32mInstalled binary: %s/neuro-ipc\e[0m\n" "$LOCAL_BIN_DIR"
 }
 
+install_tool_plugins() {
+  local tools_src="$ASSISTANT_DIR/tools"
+  local tools_dst="$HOME/.local/share/neuropipe/tools"
+
+  if [[ ! -d "$tools_src" ]]; then
+    printf "\e[33mNo tool plugins found at %s, skipping.\e[0m\n" "$tools_src"
+    return 0
+  fi
+
+  mkdir -p "$tools_dst"
+  cp -r "$tools_src"/* "$tools_dst/"
+
+  # Install Python dependencies for tools
+  if command -v pip3 &>/dev/null; then
+    pip3 install --break-system-packages --user ddgs 2>/dev/null || \
+      pip3 install --user ddgs 2>/dev/null || \
+      printf "\e[33mWarning: could not install ddgs. web_search tool may not work.\e[0m\n"
+  fi
+
+  printf "\e[32mInstalled tool plugins: "
+  local first=true
+  for d in "$tools_src"/*/; do
+    if [[ -d "$d" ]]; then
+      if [[ "$first" == true ]]; then
+        printf "%s" "$(basename "$d")"
+        first=false
+      else
+        printf ", %s" "$(basename "$d")"
+      fi
+    fi
+  done
+  printf "\e[0m\n"
+}
+
 handle_pocket_tts_voices() {
   local voices_dir="$HOME/.local/share/neuropipe/models/pocket-tts/voices"
 
@@ -501,6 +535,10 @@ run_build_flow() {
   esac
   install_cli_binary
 
+  if [[ "$selection" == "3" || "$selection" == "4" ]]; then
+    install_tool_plugins
+  fi
+
   enable_and_start_services
 
   if [[ "$selection" == "1" || "$selection" == "4" ]]; then
@@ -565,6 +603,10 @@ run_prebuilt_flow() {
       ;;
   esac
   install_cli_binary
+
+  if [[ "$selection" == "3" || "$selection" == "4" ]]; then
+    install_tool_plugins
+  fi
 
   enable_and_start_services
 
