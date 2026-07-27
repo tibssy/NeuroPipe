@@ -6,11 +6,15 @@ import threading
 import httpx
 import subprocess as sp
 import argparse
+import neuropipe_config
 from ollama import Client
 
 from tool_manager import ToolManager
 
-OLLAMA_SOCK = "/tmp/ollama.sock"
+CFG = neuropipe_config.load()
+ASSISTANT_CFG = CFG["assistant"]
+
+OLLAMA_SOCK = ASSISTANT_CFG["ollama_sock"]
 if os.path.exists(OLLAMA_SOCK):
     _transport = httpx.HTTPTransport(uds=OLLAMA_SOCK)
     _ollama = Client(transport=_transport)
@@ -28,26 +32,22 @@ STT_CMD_ADDR = "ipc:///tmp/neuropipe_cmd.sock"
 TTS_CMD_ADDR = "ipc:///tmp/neuropipe_tts_cmd.sock"
 TTS_EVENTS_ADDR = "ipc:///tmp/neuropipe_tts_events.sock"
 
-DEFAULT_MODEL = "llama3.2:1b"
-HISTORY_IDLE_TIMEOUT = 3600
+DEFAULT_MODEL = ASSISTANT_CFG["model"]
+HISTORY_IDLE_TIMEOUT = ASSISTANT_CFG["history_timeout"]
+
+SYSTEM_PROMPT_TEMPLATE = ASSISTANT_CFG["system_prompt"]
+
 
 def _build_system_message(tools: list[dict]) -> dict:
-    parts = [
-        "You are a helpful AI voice assistant.",
-        "Keep answers short and conversational.\n/set nothink",
-    ]
     if tools:
-        descs = [f"- {t['function']['name']}: {t['function']['description']}" for t in tools]
-        parts.append("")
-        parts.append("You have access to these tools:")
-        parts.extend(descs)
-        parts.append("")
-        parts.append(
-            "When the user asks about something a tool can help with, "
-            "call the appropriate tool automatically. "
-            "Do not ask for permission — just use the tool."
+        descs = "\n".join(
+            f"- {t['function']['name']}: {t['function']['description']}"
+            for t in tools
         )
-    return {'role': 'system', 'content': "\n".join(parts)}
+        content = SYSTEM_PROMPT_TEMPLATE.replace("{tool_descriptions}", descs)
+    else:
+        content = SYSTEM_PROMPT_TEMPLATE.replace("{tool_descriptions}", "")
+    return {'role': 'system', 'content': content}
 
 
 class AssistantService:
