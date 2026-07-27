@@ -272,6 +272,12 @@ pub fn validate() -> Result<(), String> {
     Ok(())
 }
 
+pub fn show_path() -> Result<(), String> {
+    let path = config_path()?;
+    println!("{}", path.display());
+    Ok(())
+}
+
 fn ensure_table<'a>(map: &'a mut TomlMap<String, TomlValue>, key: &str) -> &'a mut TomlMap<String, TomlValue> {
     if !matches!(map.get(key), Some(TomlValue::Table(_))) {
         map.insert(key.to_string(), TomlValue::Table(TomlMap::new()));

@@ -78,6 +78,9 @@ Config helpers:
 
 - `neuro-ipc config show`
 - `neuro-ipc config validate`
+- `neuro-ipc config path`
+
+The installer seeds `~/.config/neuropipe/config.toml` from `config.example.toml` if the config file does not already exist.
 
 ## Quick usage
 

@@ -33,6 +33,7 @@ struct Config {
 enum ConfigAction {
     Show,
     Validate,
+    Path,
 }
 
 #[derive(clap::Args)]
@@ -179,6 +180,12 @@ fn main() {
             }
             ConfigAction::Validate => {
                 if let Err(e) = config::validate() {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            ConfigAction::Path => {
+                if let Err(e) = config::show_path() {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }

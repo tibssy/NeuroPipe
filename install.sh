@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_BIN_DIR="$HOME/.local/bin"
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+NEUROPIPE_CONFIG_DIR="$HOME/.config/neuropipe"
+NEUROPIPE_CONFIG_FILE="$NEUROPIPE_CONFIG_DIR/config.toml"
 
 TTS_DIR="$ROOT_DIR/tts-service"
 STT_DIR="$ROOT_DIR/stt-service"
@@ -244,6 +246,25 @@ install_cli_binary() {
     return 1
   fi
   printf "\e[32mInstalled binary: %s/neuro-ipc\e[0m\n" "$LOCAL_BIN_DIR"
+}
+
+install_default_config() {
+  local config_template="$ROOT_DIR/config.example.toml"
+
+  if [[ ! -f "$config_template" ]]; then
+    printf "\e[33mWarning: missing config template at %s, skipping config install.\e[0m\n" "$config_template"
+    return 0
+  fi
+
+  mkdir -p "$NEUROPIPE_CONFIG_DIR"
+
+  if [[ -f "$NEUROPIPE_CONFIG_FILE" ]]; then
+    printf "\e[32mKeeping existing config: %s\e[0m\n" "$NEUROPIPE_CONFIG_FILE"
+    return 0
+  fi
+
+  install -Dm644 "$config_template" "$NEUROPIPE_CONFIG_FILE"
+  printf "\e[32mInstalled default config: %s\e[0m\n" "$NEUROPIPE_CONFIG_FILE"
 }
 
 install_tool_plugins() {
@@ -534,6 +555,7 @@ run_build_flow() {
       ;;
   esac
   install_cli_binary
+  install_default_config
 
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
     install_tool_plugins
@@ -603,6 +625,7 @@ run_prebuilt_flow() {
       ;;
   esac
   install_cli_binary
+  install_default_config
 
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
     install_tool_plugins
