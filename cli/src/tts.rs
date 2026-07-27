@@ -84,14 +84,37 @@ fn cycle_voice(direction: &str, engine: Option<&str>) -> Option<String> {
         return None;
     }
 
-    let voice_names: Vec<&str> = voices.iter().filter_map(|v| v.as_str()).collect();
+    let mut voice_names: Vec<String> = voices
+        .iter()
+        .filter_map(|v| v.as_str())
+        .map(|s| s.to_string())
+        .collect();
+
+    match config::favorite_voices_for_engine(eng) {
+        Ok(favorites) if !favorites.is_empty() => {
+            let available: std::collections::HashSet<String> = voice_names.iter().cloned().collect();
+            let filtered: Vec<String> = favorites
+                .into_iter()
+                .filter(|v| available.contains(v))
+                .collect();
+            if filtered.is_empty() {
+                eprintln!("No available favorite voices found for engine '{}'.", eng);
+                return None;
+            }
+            voice_names = filtered;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("Warning: failed to read favorite voices from config: {}", e);
+        }
+    }
 
     let current_base = std::path::Path::new(current_voice)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(current_voice);
 
-    let idx = voice_names.iter().position(|v| *v == current_base);
+    let idx = voice_names.iter().position(|v| v == current_base);
     let new_idx = match (idx, direction) {
         (Some(i), "next") => (i + 1) % voice_names.len(),
         (Some(i), "prev") => (i + voice_names.len() - 1) % voice_names.len(),
@@ -99,7 +122,7 @@ fn cycle_voice(direction: &str, engine: Option<&str>) -> Option<String> {
         _ => return None,
     };
 
-    Some(voice_names[new_idx].to_string())
+    Some(voice_names[new_idx].clone())
 }
 
 pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, quality: Option<&str>) {

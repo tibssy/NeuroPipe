@@ -58,11 +58,35 @@ fn cycle_model(direction: &str) -> Option<String> {
         return None;
     }
 
-    let model_names: Vec<&str> = models.iter().filter_map(|v| v.as_str()).collect();
+    let mut model_names: Vec<String> = models
+        .iter()
+        .filter_map(|v| v.as_str())
+        .map(|s| s.to_string())
+        .collect();
+
+    match config::favorite_models() {
+        Ok(favorites) if !favorites.is_empty() => {
+            let available: std::collections::HashSet<String> = model_names.iter().cloned().collect();
+            let filtered: Vec<String> = favorites
+                .into_iter()
+                .filter(|m| available.contains(m))
+                .collect();
+            if filtered.is_empty() {
+                eprintln!("No available favorite models found.");
+                return None;
+            }
+            model_names = filtered;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("Warning: failed to read favorite models from config: {}", e);
+        }
+    }
+
     let current = zmq_client::send_cmd(zmq_client::assistant_cmd(), &json!({"command": "get_state"})).ok()?;
     let current_model = current.get("model").and_then(|v| v.as_str()).unwrap_or("");
 
-    let idx = model_names.iter().position(|v| *v == current_model);
+    let idx = model_names.iter().position(|v| v == current_model);
     let new_idx = match (idx, direction) {
         (Some(i), "next") => (i + 1) % model_names.len(),
         (Some(i), "prev") => (i + model_names.len() - 1) % model_names.len(),
@@ -70,7 +94,7 @@ fn cycle_model(direction: &str) -> Option<String> {
         _ => return None,
     };
 
-    Some(model_names[new_idx].to_string())
+    Some(model_names[new_idx].clone())
 }
 
 pub fn list_models() {

@@ -21,9 +21,20 @@ speed = 1.0
 quality = "high"
 idle_timeout_sec = 60
 
+[tts.favorites]
+# Used by: neuro-ipc tts set-state --voice next|prev
+# Empty list means cycle all available voices.
+kokoro = []
+pocket_tts = []
+
 [assistant]
 default_model = "llama3.2:1b"
 history_idle_timeout_sec = 3600
+
+[assistant.favorites]
+# Used by: neuro-ipc assistant set-model next|prev
+# Empty list means cycle all available models.
+models = []
 
 [assistant.instructions]
 system_prompt = """
@@ -38,6 +49,6 @@ Do not ask for permission.
 """
 
 [assistant.tools]
-# open_url = "ask"
-# screenshot = "deny"
-# web_search = "allow"
+open_url = "ask"
+screenshot = "ask"
+web_search = "ask"

@@ -80,6 +80,12 @@ Config helpers:
 - `neuro-ipc config validate`
 - `neuro-ipc config path`
 
+Optional favorites in config can constrain cycling:
+
+- `tts.favorites` is used by `neuro-ipc tts set-state --voice next|prev`
+- `assistant.favorites.models` is used by `neuro-ipc assistant set-model next|prev`
+- Empty favorites lists keep the old behavior (cycle all available voices/models)
+
 The installer seeds `~/.config/neuropipe/config.toml` from `config.example.toml` if the config file does not already exist.
 
 ## Quick usage

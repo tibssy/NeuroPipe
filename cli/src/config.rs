@@ -33,9 +33,16 @@ speed = 1.0
 quality = "high"
 idle_timeout_sec = 60
 
+[tts.favorites]
+kokoro = []
+pocket_tts = []
+
 [assistant]
 default_model = "llama3.2:1b"
 history_idle_timeout_sec = 3600
+
+[assistant.favorites]
+models = []
 
 [assistant.instructions]
 system_prompt = """
@@ -147,6 +154,28 @@ fn require_float(table: &TomlMap<String, TomlValue>, key: &str, path: &str) -> R
         .ok_or_else(|| format!("{path}.{key} must be a number"))
 }
 
+fn require_string_array(
+    table: &TomlMap<String, TomlValue>,
+    key: &str,
+    path: &str,
+) -> Result<Vec<String>, String> {
+    let arr = table
+        .get(key)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| format!("{path}.{key} must be an array"))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for (idx, item) in arr.iter().enumerate() {
+        let Some(value) = item.as_str() else {
+            return Err(format!("{path}.{key}[{idx}] must be a string"));
+        };
+        if value.trim().is_empty() {
+            return Err(format!("{path}.{key}[{idx}] must be non-empty"));
+        }
+        out.push(value.to_string());
+    }
+    Ok(out)
+}
+
 pub fn validate_document(cfg: &TomlValue) -> Result<(), String> {
     let root = require_table(cfg, "root")?;
 
@@ -212,6 +241,26 @@ pub fn validate_document(cfg: &TomlValue) -> Result<(), String> {
         return Err("root.tts.defaults.idle_timeout_sec must be >= 1".to_string());
     }
 
+    if let Some(tts_favorites_value) = tts.get("favorites") {
+        let tts_favorites = tts_favorites_value
+            .as_table()
+            .ok_or_else(|| "root.tts.favorites must be a table".to_string())?;
+        for key in tts_favorites.keys() {
+            if key != "kokoro" && key != "pocket_tts" && key != "pocket-tts" {
+                return Err(format!("root.tts.favorites has unknown key '{key}'"));
+            }
+        }
+        if tts_favorites.contains_key("kokoro") {
+            let _ = require_string_array(tts_favorites, "kokoro", "root.tts.favorites")?;
+        }
+        if tts_favorites.contains_key("pocket_tts") {
+            let _ = require_string_array(tts_favorites, "pocket_tts", "root.tts.favorites")?;
+        }
+        if tts_favorites.contains_key("pocket-tts") {
+            let _ = require_string_array(tts_favorites, "pocket-tts", "root.tts.favorites")?;
+        }
+    }
+
     let assistant = root
         .get("assistant")
         .and_then(|v| v.as_table())
@@ -249,7 +298,104 @@ pub fn validate_document(cfg: &TomlValue) -> Result<(), String> {
         }
     }
 
+    if let Some(assistant_favorites_value) = assistant.get("favorites") {
+        let assistant_favorites = assistant_favorites_value
+            .as_table()
+            .ok_or_else(|| "root.assistant.favorites must be a table".to_string())?;
+        for key in assistant_favorites.keys() {
+            if key != "models" {
+                return Err(format!("root.assistant.favorites has unknown key '{key}'"));
+            }
+        }
+        if assistant_favorites.contains_key("models") {
+            let _ = require_string_array(assistant_favorites, "models", "root.assistant.favorites")?;
+        }
+    }
+
     Ok(())
+}
+
+pub fn favorite_voices_for_engine(engine: &str) -> Result<Vec<String>, String> {
+    let cfg = effective_config_doc()?;
+    let root = cfg
+        .as_table()
+        .ok_or_else(|| "Config root is not a TOML table".to_string())?;
+    let tts = root
+        .get("tts")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.tts must be a table".to_string())?;
+    let favorites = tts
+        .get("favorites")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.tts.favorites must be a table".to_string())?;
+
+    let key = match engine {
+        "pocket-tts" => "pocket_tts",
+        other => other,
+    };
+
+    if let Some(values) = favorites.get(key).and_then(|v| v.as_array()) {
+        let mut out = Vec::with_capacity(values.len());
+        for (idx, item) in values.iter().enumerate() {
+            let Some(value) = item.as_str() else {
+                return Err(format!("root.tts.favorites.{key}[{idx}] must be a string"));
+            };
+            if value.trim().is_empty() {
+                return Err(format!("root.tts.favorites.{key}[{idx}] must be non-empty"));
+            }
+            out.push(value.to_string());
+        }
+        return Ok(out);
+    }
+
+    if key == "pocket_tts" {
+        if let Some(values) = favorites.get("pocket-tts").and_then(|v| v.as_array()) {
+            let mut out = Vec::with_capacity(values.len());
+            for (idx, item) in values.iter().enumerate() {
+                let Some(value) = item.as_str() else {
+                    return Err(format!("root.tts.favorites.pocket-tts[{idx}] must be a string"));
+                };
+                if value.trim().is_empty() {
+                    return Err(format!("root.tts.favorites.pocket-tts[{idx}] must be non-empty"));
+                }
+                out.push(value.to_string());
+            }
+            return Ok(out);
+        }
+    }
+
+    Ok(Vec::new())
+}
+
+pub fn favorite_models() -> Result<Vec<String>, String> {
+    let cfg = effective_config_doc()?;
+    let root = cfg
+        .as_table()
+        .ok_or_else(|| "Config root is not a TOML table".to_string())?;
+    let assistant = root
+        .get("assistant")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.assistant must be a table".to_string())?;
+    let favorites = assistant
+        .get("favorites")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.assistant.favorites must be a table".to_string())?;
+
+    if let Some(values) = favorites.get("models").and_then(|v| v.as_array()) {
+        let mut out = Vec::with_capacity(values.len());
+        for (idx, item) in values.iter().enumerate() {
+            let Some(value) = item.as_str() else {
+                return Err(format!("root.assistant.favorites.models[{idx}] must be a string"));
+            };
+            if value.trim().is_empty() {
+                return Err(format!("root.assistant.favorites.models[{idx}] must be non-empty"));
+            }
+            out.push(value.to_string());
+        }
+        return Ok(out);
+    }
+
+    Ok(Vec::new())
 }
 
 pub fn show() -> Result<(), String> {
