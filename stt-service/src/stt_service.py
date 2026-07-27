@@ -5,29 +5,31 @@ import collections
 import queue as _queue
 import threading
 import time
+import neuropipe_config
 from pysilero_vad import SileroVoiceActivityDetector
 from engines.parakeet import ParakeetEngine
 
 # --- CONFIG ---
+CFG = neuropipe_config.load()
+STT_CFG = CFG["stt"]
+
 PUB_ADDR = "ipc:///tmp/neuropipe_pub.sock"
 REP_ADDR = "ipc:///tmp/neuropipe_cmd.sock"
 
-SAMPLE_RATE = 16000
-WINDOW_SIZE = 512
-STT_MODEL_NAME = "nemo-parakeet-tdt-0.6b-v3"
-MODEL_IDLE_TIMEOUT = 60  # Unload model after 60s of no transcription
+SAMPLE_RATE = STT_CFG["sample_rate"]
+WINDOW_SIZE = STT_CFG["window_size"]
+STT_MODEL_NAME = STT_CFG["model"]
+MODEL_IDLE_TIMEOUT = STT_CFG["model_idle_timeout"]
 
-# VAD
-VAD_THRESHOLD = 0.5
-DIGITAL_GAIN = 3.0
-SILENCE_DURATION_MS = 1000
-PRE_RECORD_MS = 500
+VAD_THRESHOLD = STT_CFG["vad_threshold"]
+DIGITAL_GAIN = STT_CFG["digital_gain"]
+SILENCE_DURATION_MS = STT_CFG["silence_duration_ms"]
+PRE_RECORD_MS = STT_CFG["pre_record_ms"]
 
-# Buffer Calcs
 CHUNKS_PER_SEC = SAMPLE_RATE // WINDOW_SIZE
 MAX_SILENCE_CHUNKS = int(SILENCE_DURATION_MS / 1000 * CHUNKS_PER_SEC)
 PRE_RECORD_CHUNKS = int(PRE_RECORD_MS / 1000 * CHUNKS_PER_SEC)
-MAX_RECORDING_SECONDS = 15
+MAX_RECORDING_SECONDS = STT_CFG["max_recording_sec"]
 MAX_RECORDING_CHUNKS = int(MAX_RECORDING_SECONDS * CHUNKS_PER_SEC)
 
 

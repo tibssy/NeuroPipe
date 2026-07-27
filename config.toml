@@ -1,0 +1,37 @@
+# NeuroPipe unified configuration
+# This file is read by all services on startup.
+# Settings not present here fall back to built-in defaults.
+
+[assistant]
+model = "llama3.2:1b"
+history_timeout = 3600
+ollama_sock = "/tmp/ollama.sock"
+system_prompt = """You are a helpful AI voice assistant.
+Keep answers short and conversational.
+/set nothink
+
+{tool_descriptions}"""
+
+[tts]
+engine = "kokoro"
+voice = "af_bella"
+speed = 1.0
+quality = "high"
+idle_timeout = 60
+
+[stt]
+model = "nemo-parakeet-tdt-0.6b-v3"
+sample_rate = 16000
+window_size = 512
+vad_threshold = 0.5
+digital_gain = 3.0
+silence_duration_ms = 1000
+pre_record_ms = 500
+max_recording_sec = 15
+model_idle_timeout = 60
+
+[tools]
+# Tool permissions: allow, ask, or deny
+screenshot = "ask"
+web_search = "ask"
+open_url = "deny"

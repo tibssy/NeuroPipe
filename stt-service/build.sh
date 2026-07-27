@@ -6,6 +6,7 @@ uv run python -m nuitka --onefile \
   --include-package-data=pysilero_vad \
   --include-data-files="$SITE_PACKAGES/pysilero_vad/*.bin"=pysilero_vad/ \
   --include-package-data=onnx_asr \
+  --include-module=neuropipe_config \
   --output-dir=dist \
   --output-filename=neuro-stt-service \
   --assume-yes-for-downloads \

@@ -224,6 +224,20 @@ install_component_files() {
   printf "\e[32mInstalled service: %s\e[0m\n" "$SYSTEMD_USER_DIR/$unit_name"
 }
 
+deploy_default_config() {
+  local config_dir="$HOME/.config/neuropipe"
+  local default_config="$ROOT_DIR/config.toml"
+
+  mkdir -p "$config_dir"
+
+  if [[ -f "$config_dir/config.toml" ]]; then
+    printf "\e[33mConfig already exists at %s/config.toml, skipping.\e[0m\n" "$config_dir"
+  else
+    cp "$default_config" "$config_dir/config.toml"
+    printf "\e[32mDefault config deployed to %s/config.toml\e[0m\n" "$config_dir"
+  fi
+}
+
 install_cli_binary() {
   local dist_binary="$CLI_DIR/dist/neuro-ipc"
   if [[ -f "$dist_binary" ]]; then
@@ -516,6 +530,7 @@ run_build_flow() {
 
   prompt_install_approval "Build artifacts"
   prepare_install_dirs
+  deploy_default_config
 
   case "$selection" in
     1)
@@ -585,6 +600,7 @@ run_prebuilt_flow() {
 
   prompt_install_approval "Downloaded binaries"
   prepare_install_dirs
+  deploy_default_config
 
   case "$selection" in
     1)
