@@ -3,7 +3,7 @@ use crate::zmq_client;
 
 fn send_set_mode(mode: &str) {
     let cmd = json!({"command": "set_mode", "mode": mode});
-    match zmq_client::send_cmd(zmq_client::STT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::stt_cmd(), &cmd) {
         Ok(reply) => {
             if reply.get("status").and_then(|v| v.as_str()) != Some("ok") {
                 eprintln!("Unexpected reply: {}", serde_json::to_string(&reply).unwrap());
@@ -18,7 +18,7 @@ pub fn trigger() {
     send_set_mode("VAD");
 
     let ctx = zmq::Context::new();
-    let sub = match zmq_client::create_sub(&ctx, zmq_client::STT_PUB) {
+    let sub = match zmq_client::create_sub(&ctx, zmq_client::stt_pub()) {
         Ok(s) => s,
         Err(e) => { eprintln!("Error: {}", e); send_set_mode("IDLE"); return; }
     };
@@ -60,7 +60,7 @@ pub fn record_start() {
 
 pub fn record_stop() {
     let cmd = json!({"command": "manual_stop"});
-    match zmq_client::send_cmd(zmq_client::STT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::stt_cmd(), &cmd) {
         Ok(_) => {}
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -68,7 +68,7 @@ pub fn record_stop() {
 
 pub fn listen() {
     let ctx = zmq::Context::new();
-    let sub = match zmq_client::create_sub(&ctx, zmq_client::STT_PUB) {
+    let sub = match zmq_client::create_sub(&ctx, zmq_client::stt_pub()) {
         Ok(s) => s,
         Err(e) => { eprintln!("Error: {}", e); return; }
     };

@@ -3,10 +3,10 @@ use crate::zmq_client;
 
 pub fn start(mode: &str, model: Option<&str>, engine: Option<&str>, voice: Option<&str>) {
     // Check if busy and interrupt if needed
-    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &json!({"command": "get_state"})) {
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &json!({"command": "get_state"})) {
         Ok(state) => {
             if state.get("busy").and_then(|v| v.as_bool()).unwrap_or(false) {
-                let _ = zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &json!({"command": "interrupt"}));
+                let _ = zmq_client::send_cmd(zmq_client::assistant_cmd(), &json!({"command": "interrupt"}));
             }
         }
         Err(e) => {
@@ -19,7 +19,7 @@ pub fn start(mode: &str, model: Option<&str>, engine: Option<&str>, voice: Optio
     if let Some(v) = engine { cmd["engine"] = json!(v); }
     if let Some(v) = voice { cmd["voice"] = json!(v); }
 
-    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -27,7 +27,7 @@ pub fn start(mode: &str, model: Option<&str>, engine: Option<&str>, voice: Optio
 
 pub fn interrupt() {
     let cmd = json!({"command": "interrupt"});
-    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -35,7 +35,7 @@ pub fn interrupt() {
 
 pub fn stop() {
     let cmd = json!({"command": "stop"});
-    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -43,14 +43,14 @@ pub fn stop() {
 
 pub fn get_state() {
     let cmd = json!({"command": "get_state"});
-    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
 }
 
 fn cycle_model(direction: &str) -> Option<String> {
-    let reply = zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &json!({"command": "list_models"})).ok()?;
+    let reply = zmq_client::send_cmd(zmq_client::assistant_cmd(), &json!({"command": "list_models"})).ok()?;
     let models = reply.get("models")?.as_array()?;
     if models.is_empty() {
         eprintln!("No models available.");
@@ -58,7 +58,7 @@ fn cycle_model(direction: &str) -> Option<String> {
     }
 
     let model_names: Vec<&str> = models.iter().filter_map(|v| v.as_str()).collect();
-    let current = zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &json!({"command": "get_state"})).ok()?;
+    let current = zmq_client::send_cmd(zmq_client::assistant_cmd(), &json!({"command": "get_state"})).ok()?;
     let current_model = current.get("model").and_then(|v| v.as_str()).unwrap_or("");
 
     let idx = model_names.iter().position(|v| *v == current_model);
@@ -74,7 +74,7 @@ fn cycle_model(direction: &str) -> Option<String> {
 
 pub fn list_models() {
     let cmd = json!({"command": "list_models"});
-    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -82,7 +82,7 @@ pub fn list_models() {
 
 pub fn list_tools() {
     let cmd = json!({"command": "list_tools"});
-    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -94,7 +94,7 @@ pub fn set_tools(config: &str) {
         Err(e) => { eprintln!("Invalid JSON: {}", e); return; }
     };
     let cmd = json!({"command": "set_tools", "tools": tools});
-    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -102,7 +102,7 @@ pub fn set_tools(config: &str) {
 
 pub fn grant_tool(tool: &str) {
     let cmd = json!({"command": "grant_tool", "tool": tool});
-    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -110,7 +110,7 @@ pub fn grant_tool(tool: &str) {
 
 pub fn deny_tool(tool: &str) {
     let cmd = json!({"command": "deny_tool", "tool": tool});
-    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -129,7 +129,7 @@ pub fn set_model(model: &str) {
     };
 
     let cmd = json!({"command": "set_model", "model": resolved});
-    match zmq_client::send_cmd(zmq_client::ASSISTANT_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }

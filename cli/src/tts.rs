@@ -11,7 +11,7 @@ pub fn speak(text: &str, voice: Option<&str>, speed: Option<f64>, quality: Optio
 
     if monitor {
         let ctx = zmq::Context::new();
-        let sub = match zmq_client::create_sub(&ctx, zmq_client::TTS_EVENTS) {
+        let sub = match zmq_client::create_sub(&ctx, zmq_client::tts_events()) {
             Ok(s) => s,
             Err(e) => { eprintln!("Event listener: {}", e); return; }
         };
@@ -40,7 +40,7 @@ pub fn speak(text: &str, voice: Option<&str>, speed: Option<f64>, quality: Optio
         });
     }
 
-    match zmq_client::send_cmd(zmq_client::TTS_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::tts_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -55,7 +55,7 @@ pub fn speak(text: &str, voice: Option<&str>, speed: Option<f64>, quality: Optio
 
 pub fn stop() {
     let cmd = json!({"command": "stop"});
-    match zmq_client::send_cmd(zmq_client::TTS_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::tts_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -63,20 +63,20 @@ pub fn stop() {
 
 pub fn get_state() {
     let cmd = json!({"command": "get_state"});
-    match zmq_client::send_cmd(zmq_client::TTS_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::tts_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
 }
 
 fn cycle_voice(direction: &str, engine: Option<&str>) -> Option<String> {
-    let state = zmq_client::send_cmd(zmq_client::TTS_CMD, &json!({"command": "get_state"})).ok()?;
+    let state = zmq_client::send_cmd(zmq_client::tts_cmd(), &json!({"command": "get_state"})).ok()?;
     let current_voice = state.get("voice").and_then(|v| v.as_str()).unwrap_or("");
     let eng = engine.or_else(|| state.get("engine").and_then(|v| v.as_str())).unwrap_or("pocket-tts");
 
     let mut list_cmd = json!({"command": "list_voices"});
     list_cmd["engine"] = json!(eng);
-    let reply = zmq_client::send_cmd(zmq_client::TTS_CMD, &list_cmd).ok()?;
+    let reply = zmq_client::send_cmd(zmq_client::tts_cmd(), &list_cmd).ok()?;
     let voices = reply.get("voices")?.as_array()?;
     if voices.is_empty() {
         eprintln!("No voices available.");
@@ -123,7 +123,7 @@ pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, 
     if let Some(v) = &resolved_voice { cmd["voice"] = json!(v); }
     if let Some(s) = speed { cmd["speed"] = json!(s); }
     if let Some(q) = quality { cmd["quality"] = json!(q); }
-    match zmq_client::send_cmd(zmq_client::TTS_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::tts_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -131,11 +131,11 @@ pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, 
 
 pub fn monitor() {
     let ctx = zmq::Context::new();
-    let sub = match zmq_client::create_sub(&ctx, zmq_client::TTS_EVENTS) {
+    let sub = match zmq_client::create_sub(&ctx, zmq_client::tts_events()) {
         Ok(s) => s,
         Err(e) => { eprintln!("Error: {}", e); return; }
     };
-    eprintln!("Listening for events on {}...", zmq_client::TTS_EVENTS);
+    eprintln!("Listening for events on {}...", zmq_client::tts_events());
     loop {
         match sub.recv_bytes(0) {
             Ok(bytes) => {
