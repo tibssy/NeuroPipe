@@ -476,6 +476,8 @@ print_usage_examples() {
   local selection="$1"
 
   printf "\n\e[34mQuick usage examples\e[0m\n"
+  printf "\n\e[36mConfig (bash):\e[0m\n"
+  printf "  %s/neuro-ipc config path\n" "$LOCAL_BIN_DIR"
 
   if [[ "$selection" == "1" || "$selection" == "4" ]]; then
     printf "\n\e[36mTTS (bash):\e[0m\n"
