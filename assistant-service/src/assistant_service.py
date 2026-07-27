@@ -9,6 +9,7 @@ import argparse
 from ollama import Client
 
 from tool_manager import ToolManager
+from neuropipe_config import load_config
 
 OLLAMA_SOCK = "/tmp/ollama.sock"
 if os.path.exists(OLLAMA_SOCK):
@@ -22,19 +23,19 @@ def chat(*args, **kwargs):
 
 SENTENCE_END = re.compile(r'[.!?](?:\s|$)')
 
-CMD_ADDR = "ipc:///tmp/neuropipe_assistant_cmd.sock"
-STT_PUB_ADDR = "ipc:///tmp/neuropipe_pub.sock"
-STT_CMD_ADDR = "ipc:///tmp/neuropipe_cmd.sock"
-TTS_CMD_ADDR = "ipc:///tmp/neuropipe_tts_cmd.sock"
-TTS_EVENTS_ADDR = "ipc:///tmp/neuropipe_tts_events.sock"
+_CONFIG = load_config()
 
-DEFAULT_MODEL = "llama3.2:1b"
-HISTORY_IDLE_TIMEOUT = 3600
+CMD_ADDR = _CONFIG["ipc"]["assistant_cmd"]
+STT_PUB_ADDR = _CONFIG["ipc"]["stt_pub"]
+STT_CMD_ADDR = _CONFIG["ipc"]["stt_cmd"]
+TTS_CMD_ADDR = _CONFIG["ipc"]["tts_cmd"]
+TTS_EVENTS_ADDR = _CONFIG["ipc"]["tts_events"]
 
-def _build_system_message(tools: list[dict]) -> dict:
+DEFAULT_MODEL = _CONFIG["assistant"]["default_model"]
+
+def _build_system_message(tools: list[dict], instructions: dict) -> dict:
     parts = [
-        "You are a helpful AI voice assistant.",
-        "Keep answers short and conversational.\n/set nothink",
+        instructions["system_prompt"],
     ]
     if tools:
         descs = [f"- {t['function']['name']}: {t['function']['description']}" for t in tools]
@@ -42,17 +43,14 @@ def _build_system_message(tools: list[dict]) -> dict:
         parts.append("You have access to these tools:")
         parts.extend(descs)
         parts.append("")
-        parts.append(
-            "When the user asks about something a tool can help with, "
-            "call the appropriate tool automatically. "
-            "Do not ask for permission — just use the tool."
-        )
+        parts.append(instructions["tool_usage_policy"])
     return {'role': 'system', 'content': "\n".join(parts)}
 
 
 class AssistantService:
     def __init__(self):
         self.ctx = zmq.Context()
+        self.config = _CONFIG
 
         self.cmd_socket = self.ctx.socket(zmq.REP)
         self.cmd_socket.bind(CMD_ADDR)
@@ -85,14 +83,14 @@ class AssistantService:
 
         self.cancel_event = threading.Event()
         self.ollama_thread = None
-        self.history = [_build_system_message([])]
+        self.history = [_build_system_message([], self.config["assistant"]["instructions"])]
         self.last_activity = time.time()
         self._pending_sentences = 0
         self._spoken_buffer = []
         self._spoken_lock = threading.Lock()
 
         # External tool plugins
-        self.tool_manager = ToolManager()
+        self.tool_manager = ToolManager(initial_config=self.config["assistant"].get("tools", {}))
         self.tool_manager.discover()
 
         # Persistent TTS events SUB socket
@@ -341,14 +339,14 @@ class AssistantService:
         if model:
             self.ollama_model = model
         self._unload_other_models()
-        idle = time.time() - self.last_activity > HISTORY_IDLE_TIMEOUT
+        idle = time.time() - self.last_activity > self.config["assistant"]["history_idle_timeout_sec"]
         if idle:
             print("Idle > 1h, clearing history.")
         self.tool_manager.reset_session()
         # Only reset history on first start or idle timeout — preserve on mode switches
         if idle or len(self.history) <= 1:
             tools = self.tool_manager.active_definitions()
-            self.history = [_build_system_message(tools)]
+            self.history = [_build_system_message(tools, self.config["assistant"]["instructions"])]
 
         tts_state = {}
         if engine:
@@ -477,7 +475,7 @@ class AssistantService:
 
                         elif cmd == "set_model":
                             model = msg.get("model")
-                            if model:
+                            if isinstance(model, str) and model.strip():
                                 self.ollama_model = model
                             sp.run(["notify-send", "-h", "boolean:transient:true",
                                     "NeuroPipe Assistant", f"Model: {self.ollama_model}"],
@@ -489,8 +487,24 @@ class AssistantService:
 
                         elif cmd == "set_tools":
                             new_config = msg.get("tools", {})
-                            self.tool_manager.set_config(new_config)
-                            self.cmd_socket.send_json({"tools": self.tool_manager.list_all()})
+                            if not isinstance(new_config, dict):
+                                self.cmd_socket.send_json({"status": "error", "message": "tools must be an object"})
+                                continue
+
+                            known_tools = set(self.tool_manager.list_all().keys())
+                            validation_error = None
+                            for tool_name, level in new_config.items():
+                                if tool_name not in known_tools:
+                                    validation_error = f"Unknown tool '{tool_name}'"
+                                    break
+                                if level not in ("allow", "ask", "deny"):
+                                    validation_error = f"Invalid permission '{level}' for tool '{tool_name}'"
+                                    break
+                            if validation_error is None:
+                                self.tool_manager.set_config(new_config)
+                                self.cmd_socket.send_json({"tools": self.tool_manager.list_all()})
+                                continue
+                            self.cmd_socket.send_json({"status": "error", "message": validation_error})
 
                         elif cmd == "grant_tool":
                             tool_name = msg.get("tool", "")

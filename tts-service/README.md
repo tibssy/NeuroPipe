@@ -54,6 +54,9 @@ systemctl --user enable --now neuropipe-tts.service
 
 ## Command payload examples
 
+The service validates engine/voice/speed/quality combinations before applying defaults or speaking.
+Invalid engine/voice mismatch returns an error and does not update runtime state or config.
+
 ### Kokoro (default)
 
 ```json

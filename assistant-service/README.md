@@ -27,6 +27,8 @@ Voice assistant daemon for NeuroPipe. Connects STT → Ollama → TTS into a con
 | `stop` | — | Stop session, set STT to IDLE |
 | `get_state` | — | Return mode, busy, model, engine, voice |
 
+Configuration is persisted to `~/.config/neuropipe/config.toml` when using `neuro-ipc assistant set-model` and `neuro-ipc assistant set-tools`.
+
 ## Usage
 
 ### Run directly (development)

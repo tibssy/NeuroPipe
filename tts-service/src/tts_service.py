@@ -10,11 +10,13 @@ import subprocess as sp
 from engines.kokoro import KokoroEngine
 from engines.pocket_tts import PocketTTSEngine
 # from engines.piper import PiperEngine
+from neuropipe_config import load_config
 
 # --- CONFIG ---
-CMD_ADDR = "ipc:///tmp/neuropipe_tts_cmd.sock"
-PUB_ADDR = "ipc:///tmp/neuropipe_tts_events.sock"
-IDLE_TIMEOUT = 60
+_CONFIG = load_config()
+
+CMD_ADDR = _CONFIG["ipc"]["tts_cmd"]
+PUB_ADDR = _CONFIG["ipc"]["tts_events"]
 
 
 class TTSService:
@@ -45,10 +47,11 @@ class TTSService:
         self.last_activity = time.time()
 
         # Defaults (can be changed via set_state)
-        self.default_engine = "kokoro"
-        self.default_voice = "af_bella"
-        self.default_speed = 1.0
-        self.default_quality = "high"
+        self.default_engine = _CONFIG["tts"]["defaults"]["engine"]
+        self.default_voice = _CONFIG["tts"]["defaults"]["voice"]
+        self.default_speed = _CONFIG["tts"]["defaults"]["speed"]
+        self.default_quality = _CONFIG["tts"]["defaults"]["quality"]
+        self.idle_timeout = _CONFIG["tts"]["defaults"]["idle_timeout_sec"]
 
         # Start Player
         threading.Thread(target=self._player_loop, daemon=True).start()
@@ -121,12 +124,41 @@ class TTSService:
             except queue.Empty:
                 # --- IDLE CHECK ---
                 if self.active_engine and (
-                        time.time() - self.last_activity > IDLE_TIMEOUT):
-                    print(f"Idle for {IDLE_TIMEOUT}s. Releasing resources.")
+                        time.time() - self.last_activity > self.idle_timeout):
+                    print(f"Idle for {self.idle_timeout}s. Releasing resources.")
                     self.active_engine.unload()
                     self.active_engine = None
                     self.active_engine_name = None
                     print("System is now in Cold Standby.")
+
+    def _validate_tts_state(self, engine, voice, speed, quality):
+        if engine not in self.engines:
+            return f"Invalid engine '{engine}'. Expected one of: {', '.join(sorted(self.engines.keys()))}"
+
+        if quality not in ("low", "high"):
+            return f"Invalid quality '{quality}'. Expected 'low' or 'high'."
+
+        if not isinstance(speed, (int, float)) or speed < 0.5 or speed > 2.0:
+            return "Invalid speed. Expected a number between 0.5 and 2.0."
+
+        if not isinstance(voice, str) or not voice.strip():
+            return "Invalid voice. Voice must be a non-empty string."
+
+        if voice.endswith(".safetensors"):
+            if engine != "pocket-tts":
+                return "Custom .safetensors voices are only supported by engine 'pocket-tts'."
+            expanded = os.path.abspath(os.path.expanduser(voice))
+            if os.path.exists(expanded):
+                return None
+            return "Voice file path must point to an existing .safetensors file."
+
+        engine_obj = self.engines.get(engine)
+        if engine_obj and hasattr(engine_obj, "list_voices"):
+            voices = engine_obj.list_voices()
+            if voice in voices:
+                return None
+
+        return f"Voice '{voice}' is not available for engine '{engine}'."
 
     def _generate_audio(self, text, voice, speed):
         try:
@@ -159,6 +191,12 @@ class TTSService:
                     voice = msg.get("voice", self.default_voice)
                     speed = msg.get("speed", self.default_speed)
                     quality = msg.get("quality", self.default_quality)
+
+                    validation_err = self._validate_tts_state(engine, voice, speed, quality)
+                    if validation_err:
+                        self.cmd_socket.send_json({"status": "error", "message": validation_err})
+                        self.interrupt_event.clear()
+                        continue
 
                     self._switch_engine(engine)
 
@@ -214,14 +252,26 @@ class TTSService:
                     self.cmd_socket.send_json({"voices": voices})
 
                 elif cmd == "set_state":
-                    if "engine" in msg:
-                        self.default_engine = msg["engine"]
-                    if "voice" in msg:
-                        self.default_voice = msg["voice"]
-                    if "speed" in msg:
-                        self.default_speed = msg["speed"]
-                    if "quality" in msg:
-                        self.default_quality = msg["quality"]
+                    next_engine = msg.get("engine", self.default_engine)
+                    next_voice = msg.get("voice", self.default_voice)
+                    next_speed = msg.get("speed", self.default_speed)
+                    next_quality = msg.get("quality", self.default_quality)
+
+                    validation_err = self._validate_tts_state(
+                        next_engine,
+                        next_voice,
+                        next_speed,
+                        next_quality,
+                    )
+                    if validation_err:
+                        self.cmd_socket.send_json({"status": "error", "message": validation_err})
+                        continue
+
+                    self.default_engine = next_engine
+                    self.default_voice = next_voice
+                    self.default_speed = next_speed
+                    self.default_quality = next_quality
+
                     voice_label = os.path.splitext(os.path.basename(self.default_voice))[0]
                     sp.run(
                         ["notify-send", "-h", "boolean:transient:true", "NeuroPipe TTS",

@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod zmq_client;
+mod config;
 mod tts;
 mod stt;
 mod assistant;
@@ -18,7 +19,21 @@ enum Commands {
     Tts(Tts),
     Stt(Stt),
     Assistant(Assistant),
+    Config(Config),
     Status,
+}
+
+#[derive(clap::Args)]
+struct Config {
+    #[command(subcommand)]
+    action: ConfigAction,
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    Show,
+    Validate,
+    Path,
 }
 
 #[derive(clap::Args)]
@@ -155,6 +170,26 @@ fn main() {
             AssistantAction::SetTools { config } => assistant::set_tools(&config),
             AssistantAction::GrantTool { tool } => assistant::grant_tool(&tool),
             AssistantAction::DenyTool { tool } => assistant::deny_tool(&tool),
+        },
+        Commands::Config(c) => match c.action {
+            ConfigAction::Show => {
+                if let Err(e) = config::show() {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            ConfigAction::Validate => {
+                if let Err(e) = config::validate() {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            ConfigAction::Path => {
+                if let Err(e) = config::show_path() {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
         },
         Commands::Status => status::status(),
     }

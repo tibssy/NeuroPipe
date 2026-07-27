@@ -58,6 +58,36 @@ systemctl --user status neuropipe-tts.service
 systemctl --user status neuropipe-assistant.service
 ```
 
+## Configuration
+
+NeuroPipe uses a unified config file:
+
+- `~/.config/neuropipe/config.toml`
+- Use `config.example.toml` in this repository as a starting template
+
+Services load this file on startup and keep settings in memory for low-latency runtime behavior.
+Config changes from CLI commands are persisted atomically to disk. Manual file edits are applied after service restart.
+
+Commands that persist config:
+
+- `neuro-ipc tts set-state ...`
+- `neuro-ipc assistant set-model ...`
+- `neuro-ipc assistant set-tools ...`
+
+Config helpers:
+
+- `neuro-ipc config show`
+- `neuro-ipc config validate`
+- `neuro-ipc config path`
+
+Optional favorites in config can constrain cycling:
+
+- `tts.favorites` is used by `neuro-ipc tts set-state --voice next|prev`
+- `assistant.favorites.models` is used by `neuro-ipc assistant set-model next|prev`
+- Empty favorites lists keep the old behavior (cycle all available voices/models)
+
+The installer seeds `~/.config/neuropipe/config.toml` from `config.example.toml` if the config file does not already exist.
+
 ## Quick usage
 
 ### STT one-shot trigger

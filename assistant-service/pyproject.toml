@@ -5,6 +5,7 @@ description = "NeuroPipe Assistant Service — STT → Ollama → TTS voice assi
 readme = "README.md"
 requires-python = ">=3.13, <3.14"
 dependencies = [
+    "httpx>=0.28.1",
     "nuitka>=2.8.9",
     "ollama>=0.6.1",
     "pyzmq>=27.1.0",

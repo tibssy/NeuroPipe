@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 use serde_json::{json, Value};
 use crate::zmq_client;
+use crate::config;
 
 pub fn speak(text: &str, voice: Option<&str>, speed: Option<f64>, quality: Option<&str>, engine: Option<&str>, monitor: bool) {
     let mut cmd = json!({"command": "speak", "text": text});
@@ -11,7 +12,7 @@ pub fn speak(text: &str, voice: Option<&str>, speed: Option<f64>, quality: Optio
 
     if monitor {
         let ctx = zmq::Context::new();
-        let sub = match zmq_client::create_sub(&ctx, zmq_client::TTS_EVENTS) {
+        let sub = match zmq_client::create_sub(&ctx, zmq_client::tts_events()) {
             Ok(s) => s,
             Err(e) => { eprintln!("Event listener: {}", e); return; }
         };
@@ -40,7 +41,7 @@ pub fn speak(text: &str, voice: Option<&str>, speed: Option<f64>, quality: Optio
         });
     }
 
-    match zmq_client::send_cmd(zmq_client::TTS_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::tts_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -55,7 +56,7 @@ pub fn speak(text: &str, voice: Option<&str>, speed: Option<f64>, quality: Optio
 
 pub fn stop() {
     let cmd = json!({"command": "stop"});
-    match zmq_client::send_cmd(zmq_client::TTS_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::tts_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -63,34 +64,57 @@ pub fn stop() {
 
 pub fn get_state() {
     let cmd = json!({"command": "get_state"});
-    match zmq_client::send_cmd(zmq_client::TTS_CMD, &cmd) {
+    match zmq_client::send_cmd(zmq_client::tts_cmd(), &cmd) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }
 }
 
 fn cycle_voice(direction: &str, engine: Option<&str>) -> Option<String> {
-    let state = zmq_client::send_cmd(zmq_client::TTS_CMD, &json!({"command": "get_state"})).ok()?;
+    let state = zmq_client::send_cmd(zmq_client::tts_cmd(), &json!({"command": "get_state"})).ok()?;
     let current_voice = state.get("voice").and_then(|v| v.as_str()).unwrap_or("");
     let eng = engine.or_else(|| state.get("engine").and_then(|v| v.as_str())).unwrap_or("pocket-tts");
 
     let mut list_cmd = json!({"command": "list_voices"});
     list_cmd["engine"] = json!(eng);
-    let reply = zmq_client::send_cmd(zmq_client::TTS_CMD, &list_cmd).ok()?;
+    let reply = zmq_client::send_cmd(zmq_client::tts_cmd(), &list_cmd).ok()?;
     let voices = reply.get("voices")?.as_array()?;
     if voices.is_empty() {
         eprintln!("No voices available.");
         return None;
     }
 
-    let voice_names: Vec<&str> = voices.iter().filter_map(|v| v.as_str()).collect();
+    let mut voice_names: Vec<String> = voices
+        .iter()
+        .filter_map(|v| v.as_str())
+        .map(|s| s.to_string())
+        .collect();
+
+    match config::favorite_voices_for_engine(eng) {
+        Ok(favorites) if !favorites.is_empty() => {
+            let available: std::collections::HashSet<String> = voice_names.iter().cloned().collect();
+            let filtered: Vec<String> = favorites
+                .into_iter()
+                .filter(|v| available.contains(v))
+                .collect();
+            if filtered.is_empty() {
+                eprintln!("No available favorite voices found for engine '{}'.", eng);
+                return None;
+            }
+            voice_names = filtered;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("Warning: failed to read favorite voices from config: {}", e);
+        }
+    }
 
     let current_base = std::path::Path::new(current_voice)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(current_voice);
 
-    let idx = voice_names.iter().position(|v| *v == current_base);
+    let idx = voice_names.iter().position(|v| v == current_base);
     let new_idx = match (idx, direction) {
         (Some(i), "next") => (i + 1) % voice_names.len(),
         (Some(i), "prev") => (i + voice_names.len() - 1) % voice_names.len(),
@@ -98,7 +122,7 @@ fn cycle_voice(direction: &str, engine: Option<&str>) -> Option<String> {
         _ => return None,
     };
 
-    Some(voice_names[new_idx].to_string())
+    Some(voice_names[new_idx].clone())
 }
 
 pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, quality: Option<&str>) {
@@ -123,19 +147,39 @@ pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, 
     if let Some(v) = &resolved_voice { cmd["voice"] = json!(v); }
     if let Some(s) = speed { cmd["speed"] = json!(s); }
     if let Some(q) = quality { cmd["quality"] = json!(q); }
-    match zmq_client::send_cmd(zmq_client::TTS_CMD, &cmd) {
-        Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
+    match zmq_client::send_cmd(zmq_client::tts_cmd(), &cmd) {
+        Ok(reply) => {
+            let is_error = reply.get("status").and_then(|v| v.as_str()) == Some("error");
+            if !is_error {
+                let engine = reply.get("engine").and_then(|v| v.as_str());
+                let voice = reply.get("voice").and_then(|v| v.as_str());
+                let speed = reply.get("speed").and_then(|v| v.as_f64());
+                let quality = reply.get("quality").and_then(|v| v.as_str());
+
+                match (engine, voice, speed, quality) {
+                    (Some(engine), Some(voice), Some(speed), Some(quality)) => {
+                        if let Err(e) = config::persist_tts_defaults(engine, voice, speed, quality) {
+                            eprintln!("Warning: state updated in service, but failed to persist config: {}", e);
+                        }
+                    }
+                    _ => {
+                        eprintln!("Warning: state updated in service, but reply missing fields for config persistence.");
+                    }
+                }
+            }
+            println!("{}", serde_json::to_string_pretty(&reply).unwrap());
+        }
         Err(e) => eprintln!("Error: {}", e),
     }
 }
 
 pub fn monitor() {
     let ctx = zmq::Context::new();
-    let sub = match zmq_client::create_sub(&ctx, zmq_client::TTS_EVENTS) {
+    let sub = match zmq_client::create_sub(&ctx, zmq_client::tts_events()) {
         Ok(s) => s,
         Err(e) => { eprintln!("Error: {}", e); return; }
     };
-    eprintln!("Listening for events on {}...", zmq_client::TTS_EVENTS);
+    eprintln!("Listening for events on {}...", zmq_client::tts_events());
     loop {
         match sub.recv_bytes(0) {
             Ok(bytes) => {

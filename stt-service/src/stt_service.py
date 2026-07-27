@@ -7,19 +7,22 @@ import threading
 import time
 from pysilero_vad import SileroVoiceActivityDetector
 from engines.parakeet import ParakeetEngine
+from neuropipe_config import load_config
 
 # --- CONFIG ---
-PUB_ADDR = "ipc:///tmp/neuropipe_pub.sock"
-REP_ADDR = "ipc:///tmp/neuropipe_cmd.sock"
+_CONFIG = load_config()
+
+PUB_ADDR = _CONFIG["ipc"]["stt_pub"]
+REP_ADDR = _CONFIG["ipc"]["stt_cmd"]
 
 SAMPLE_RATE = 16000
 WINDOW_SIZE = 512
-STT_MODEL_NAME = "nemo-parakeet-tdt-0.6b-v3"
-MODEL_IDLE_TIMEOUT = 60  # Unload model after 60s of no transcription
+STT_MODEL_NAME = _CONFIG["stt"]["model"]
+MODEL_IDLE_TIMEOUT = _CONFIG["stt"]["model_idle_timeout_sec"]  # Unload model after idle
 
 # VAD
-VAD_THRESHOLD = 0.5
-DIGITAL_GAIN = 3.0
+VAD_THRESHOLD = _CONFIG["stt"]["vad_threshold"]
+DIGITAL_GAIN = _CONFIG["stt"]["digital_gain"]
 SILENCE_DURATION_MS = 1000
 PRE_RECORD_MS = 500
 
@@ -46,7 +49,7 @@ class STTService:
         self.rep.bind(REP_ADDR)
 
         # Logic State
-        self.mode = "IDLE"
+        self.mode = _CONFIG["stt"].get("mode", "IDLE")
         self.running = True
         self.stream = None
 
