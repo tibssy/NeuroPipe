@@ -15,5 +15,6 @@ dependencies = [
     "safetensors>=0.8.0",
     "sentencepiece>=0.2.1",
     "sounddevice>=0.5.3",
+    "tomli-w>=1.2.0",
     "zstandard>=0.25.0",
 ]

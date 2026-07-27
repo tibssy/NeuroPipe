@@ -1,30 +1,11 @@
 import json
 import os
 import subprocess as sp
-import time
 
 _INSTALLED_TOOLS = os.path.expanduser("~/.local/share/neuropipe/tools")
 _BUNDLED_TOOLS = os.path.join(os.path.dirname(__file__), "..", "tools")
 TOOLS_DIR = _INSTALLED_TOOLS if os.path.isdir(_INSTALLED_TOOLS) else _BUNDLED_TOOLS
-CONFIG_DIR = os.path.expanduser("~/.config/neuropipe")
-CONFIG_FILE = os.path.join(CONFIG_DIR, "tools_config.json")
 EXEC_TIMEOUT = 30
-
-
-def _load_config() -> dict[str, str]:
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
-
-
-def _save_config(cfg: dict[str, str]):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(cfg, f, indent=2)
 
 
 class ToolDef:
@@ -68,13 +49,12 @@ class ToolDef:
 
 
 class ToolManager:
-    def __init__(self):
+    def __init__(self, initial_config: dict[str, str] | None = None):
         self._tools: dict[str, ToolDef] = {}
-        self._config: dict[str, str] = {}
+        self._config: dict[str, str] = dict(initial_config or {})
         self._granted: dict[str, bool] = {}
 
     def discover(self):
-        self._config = _load_config()
         if not os.path.isdir(TOOLS_DIR):
             return
         for name in sorted(os.listdir(TOOLS_DIR)):
@@ -94,10 +74,6 @@ class ToolManager:
                     self._config[name] = metadata.get("default_permission", "ask")
             except Exception as e:
                 print(f"[ToolManager] Failed to load '{name}': {e}")
-        self._save()
-
-    def _save(self):
-        _save_config(self._config)
 
     def active_definitions(self) -> list[dict]:
         return [
@@ -115,7 +91,6 @@ class ToolManager:
                 self._config[name] = level
             elif name in self._tools:
                 print(f"[ToolManager] Invalid level '{level}' for {name}")
-        self._save()
 
     def check(self, name: str) -> str:
         return self._config.get(name, "deny")
