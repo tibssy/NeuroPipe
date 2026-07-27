@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+import json
+import os
+import sys
+
+try:
+    from ddgs import DDGS
+except ImportError:
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError:
+        print(json.dumps({
+            "success": False,
+            "error": "ddgs library not installed. Run: pip install ddgs"
+        }))
+        sys.exit(0)
+
+
+def main():
+    if len(sys.argv) >= 2 and sys.argv[1]:
+        params = json.loads(sys.argv[1])
+    else:
+        params = json.loads(sys.stdin.read())
+
+    query = params.get("query", "").strip()
+    if not query:
+        print(json.dumps({"success": False, "error": "No search query provided"}))
+        return
+
+    max_results = params.get("max_results")
+    if max_results is None:
+        max_results = params.get("top_k") or params.get("topn") or 5
+    max_results = min(int(max_results), 10)
+
+    try:
+        ddgs = DDGS()
+        results = list(ddgs.text(query, max_results=max_results))
+        if not results:
+            print(json.dumps({"success": True, "result": f"No results found for '{query}'."}))
+            return
+
+        lines = [f"Web search results for: {query}"]
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "").strip()
+            url = r.get("href", "").strip()
+            body = r.get("body", "").strip()
+            lines.append(f"\n{i}. {title}")
+            lines.append(f"   {body[:250]}")
+
+        print(json.dumps({"success": True, "result": "\n".join(lines)}))
+    except Exception as e:
+        print(json.dumps({"success": False, "error": str(e)}))
+
+
+if __name__ == "__main__":
+    main()

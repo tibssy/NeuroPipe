@@ -104,6 +104,16 @@ enum AssistantAction {
     SetModel {
         model: String,
     },
+    ListTools,
+    SetTools {
+        config: String,
+    },
+    GrantTool {
+        tool: String,
+    },
+    DenyTool {
+        tool: String,
+    },
 }
 
 fn main() {
@@ -141,6 +151,10 @@ fn main() {
             AssistantAction::GetState => assistant::get_state(),
             AssistantAction::ListModels => assistant::list_models(),
             AssistantAction::SetModel { model } => assistant::set_model(&model),
+            AssistantAction::ListTools => assistant::list_tools(),
+            AssistantAction::SetTools { config } => assistant::set_tools(&config),
+            AssistantAction::GrantTool { tool } => assistant::grant_tool(&tool),
+            AssistantAction::DenyTool { tool } => assistant::deny_tool(&tool),
         },
         Commands::Status => status::status(),
     }

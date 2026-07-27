@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+import json
+import os
+import subprocess as sp
+import sys
+
+SCREENSHOT_DIR = "/tmp/neuropipe_screenshots"
+
+
+def detect_compositor() -> str:
+    de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    if "hyprland" in de:
+        return "hyprland"
+    elif "niri" in de:
+        return "niri"
+    elif "sway" in de:
+        return "sway"
+    return "unknown"
+
+
+def focused_geometry(compositor: str) -> str | None:
+    try:
+        if compositor == "hyprland":
+            out = sp.run(["hyprctl", "-j", "activewindow"], capture_output=True, text=True).stdout
+            d = json.loads(out)
+            return f"{d['at'][0]},{d['at'][1]} {d['size'][0]}x{d['size'][1]}"
+        elif compositor == "niri":
+            out = sp.run(["niri", "msg", "focused-window"], capture_output=True, text=True).stdout
+            d = json.loads(out)["geometry"]
+            return f"{d['x']},{d['y']} {d['width']}x{d['height']}"
+        elif compositor == "sway":
+            out = sp.run(["swaymsg", "-t", "get_tree"], capture_output=True, text=True).stdout
+            d = json.loads(out)
+            def find(node):
+                if node.get("focused"):
+                    return node["rect"]
+                for c in node.get("nodes", []) + node.get("floating_nodes", []):
+                    r = find(c)
+                    if r:
+                        return r
+                return None
+            r = find(d)
+            if r:
+                return f"{r['x']},{r['y']} {r['width']}x{r['height']}"
+    except Exception:
+        pass
+    return None
+
+
+def capture(region: str, path: str) -> bool:
+    if region == "focused":
+        geom = focused_geometry(detect_compositor())
+        if geom:
+            return sp.run(["grim", "-g", geom, path]).returncode == 0
+        geom = sp.run(["slurp"], capture_output=True, text=True).stdout.strip()
+        if geom:
+            return sp.run(["grim", "-g", geom, path]).returncode == 0
+        return False
+    elif region == "screen":
+        return sp.run(["grim", path]).returncode == 0
+    elif region == "select":
+        geom = sp.run(["slurp"], capture_output=True, text=True).stdout.strip()
+        if geom:
+            return sp.run(["grim", "-g", geom, path]).returncode == 0
+        return False
+    return False
+
+
+def ocr(path: str) -> str:
+    result = sp.run(
+        ["tesseract", path, "stdout", "--oem", "3", "--psm", "6"],
+        capture_output=True, text=True, timeout=30,
+    )
+    return result.stdout.strip() or "(no text detected)"
+
+
+def main():
+    if len(sys.argv) >= 2 and sys.argv[1]:
+        params = json.loads(sys.argv[1])
+    else:
+        params = json.loads(sys.stdin.read())
+
+    region = params.get("region", "focused")
+    os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+    path = os.path.join(SCREENSHOT_DIR, "capture.png")
+
+    if capture(region, path):
+        text = ocr(path)
+        print(json.dumps({"success": True, "result": f"OCR text extracted from your screen ({region} region):\n{text}"}))
+    else:
+        print(json.dumps({"success": False, "error": "Screenshot capture failed"}))
+
+
+if __name__ == "__main__":
+    main()
