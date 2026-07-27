@@ -9,7 +9,7 @@ import argparse
 from ollama import Client
 
 from tool_manager import ToolManager
-from neuropipe_config import load_config, update_config
+from neuropipe_config import load_config
 
 OLLAMA_SOCK = "/tmp/ollama.sock"
 if os.path.exists(OLLAMA_SOCK):
@@ -32,7 +32,6 @@ TTS_CMD_ADDR = _CONFIG["ipc"]["tts_cmd"]
 TTS_EVENTS_ADDR = _CONFIG["ipc"]["tts_events"]
 
 DEFAULT_MODEL = _CONFIG["assistant"]["default_model"]
-HISTORY_IDLE_TIMEOUT = _CONFIG["assistant"]["history_idle_timeout_sec"]
 
 def _build_system_message(tools: list[dict], instructions: dict) -> dict:
     parts = [
@@ -100,21 +99,6 @@ class AssistantService:
         self.tts_events_sock.setsockopt_string(zmq.SUBSCRIBE, "")
 
         sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Starting..."], capture_output=True)
-
-    def _persist_assistant_config(self, model=None, tools=None):
-        current_model = model if model is not None else self.ollama_model
-        current_tools = tools if tools is not None else self.tool_manager.list_all()
-
-        def mutate(cfg):
-            cfg.setdefault("assistant", {})
-            cfg["assistant"]["default_model"] = current_model
-            cfg["assistant"]["history_idle_timeout_sec"] = self.config["assistant"]["history_idle_timeout_sec"]
-            cfg["assistant"]["tools"] = current_tools
-            cfg["assistant"].setdefault("instructions", {})
-            cfg["assistant"]["instructions"]["system_prompt"] = self.config["assistant"]["instructions"]["system_prompt"]
-            cfg["assistant"]["instructions"]["tool_usage_policy"] = self.config["assistant"]["instructions"]["tool_usage_policy"]
-
-        update_config(mutate)
 
     def set_stt_mode(self, mode):
         with self.stt_lock:
@@ -492,11 +476,6 @@ class AssistantService:
                         elif cmd == "set_model":
                             model = msg.get("model")
                             if isinstance(model, str) and model.strip():
-                                try:
-                                    self._persist_assistant_config(model=model)
-                                except Exception as e:
-                                    self.cmd_socket.send_json({"status": "error", "message": f"Failed to save config: {e}"})
-                                    continue
                                 self.ollama_model = model
                             sp.run(["notify-send", "-h", "boolean:transient:true",
                                     "NeuroPipe Assistant", f"Model: {self.ollama_model}"],
@@ -522,14 +501,6 @@ class AssistantService:
                                     validation_error = f"Invalid permission '{level}' for tool '{tool_name}'"
                                     break
                             if validation_error is None:
-                                candidate_tools = self.tool_manager.list_all()
-                                for name, level in new_config.items():
-                                    candidate_tools[name] = level
-                                try:
-                                    self._persist_assistant_config(tools=candidate_tools)
-                                except Exception as e:
-                                    self.cmd_socket.send_json({"status": "error", "message": f"Failed to save config: {e}"})
-                                    continue
                                 self.tool_manager.set_config(new_config)
                                 self.cmd_socket.send_json({"tools": self.tool_manager.list_all()})
                                 continue

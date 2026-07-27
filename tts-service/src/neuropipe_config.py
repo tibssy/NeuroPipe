@@ -2,8 +2,6 @@ import copy
 import os
 import tomllib
 
-import tomli_w
-
 
 CONFIG_PATH = os.path.expanduser("~/.config/neuropipe/config.toml")
 
@@ -107,24 +105,6 @@ def validate_config(config: dict):
     _validate_assistant(config.get("assistant", {}))
 
 
-def _atomic_write(path: str, data: bytes):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp_path = f"{path}.tmp.{os.getpid()}"
-
-    with open(tmp_path, "wb") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-
-    os.replace(tmp_path, path)
-
-    dir_fd = os.open(os.path.dirname(path), os.O_DIRECTORY)
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
-
-
 def load_config() -> dict:
     merged = copy.deepcopy(DEFAULT_CONFIG)
     if os.path.exists(CONFIG_PATH):
@@ -143,15 +123,3 @@ def load_config() -> dict:
         merged = copy.deepcopy(DEFAULT_CONFIG)
 
     return merged
-
-
-def save_config(config: dict):
-    validate_config(config)
-    text = tomli_w.dumps(config)
-    _atomic_write(CONFIG_PATH, text.encode("utf-8"))
-
-
-def update_config(mutator):
-    current = load_config()
-    mutator(current)
-    save_config(current)

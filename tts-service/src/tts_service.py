@@ -10,7 +10,7 @@ import subprocess as sp
 from engines.kokoro import KokoroEngine
 from engines.pocket_tts import PocketTTSEngine
 # from engines.piper import PiperEngine
-from neuropipe_config import load_config, update_config
+from neuropipe_config import load_config
 
 # --- CONFIG ---
 _CONFIG = load_config()
@@ -160,18 +160,6 @@ class TTSService:
 
         return f"Voice '{voice}' is not available for engine '{engine}'."
 
-    def _persist_defaults(self, engine, voice, speed, quality):
-        def mutate(cfg):
-            cfg.setdefault("tts", {})
-            cfg["tts"].setdefault("defaults", {})
-            cfg["tts"]["defaults"]["engine"] = engine
-            cfg["tts"]["defaults"]["voice"] = voice
-            cfg["tts"]["defaults"]["speed"] = float(speed)
-            cfg["tts"]["defaults"]["quality"] = quality
-            cfg["tts"]["defaults"]["idle_timeout_sec"] = int(self.idle_timeout)
-
-        update_config(mutate)
-
     def _generate_audio(self, text, voice, speed):
         try:
             for audio, sr, sent in self.active_engine.generate(text, voice, speed):
@@ -277,12 +265,6 @@ class TTSService:
                     )
                     if validation_err:
                         self.cmd_socket.send_json({"status": "error", "message": validation_err})
-                        continue
-
-                    try:
-                        self._persist_defaults(next_engine, next_voice, next_speed, next_quality)
-                    except Exception as e:
-                        self.cmd_socket.send_json({"status": "error", "message": f"Failed to save config: {e}"})
                         continue
 
                     self.default_engine = next_engine
