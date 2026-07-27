@@ -74,6 +74,11 @@ Commands that persist config:
 - `neuro-ipc assistant set-model ...`
 - `neuro-ipc assistant set-tools ...`
 
+Config helpers:
+
+- `neuro-ipc config show`
+- `neuro-ipc config validate`
+
 ## Quick usage
 
 ### STT one-shot trigger

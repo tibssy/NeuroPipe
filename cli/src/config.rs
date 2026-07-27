@@ -48,6 +48,8 @@ When the user asks about something a tool can help with,
 call the appropriate tool automatically.
 Do not ask for permission.
 """
+
+[assistant.tools]
 "#;
 
 fn config_path() -> Result<PathBuf, String> {
@@ -55,10 +57,53 @@ fn config_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join(".config/neuropipe/config.toml"))
 }
 
-fn load_config_doc() -> Result<TomlValue, String> {
-    let default_cfg = DEFAULT_CONFIG
+fn parse_default_config() -> Result<TomlValue, String> {
+    DEFAULT_CONFIG
         .parse::<TomlValue>()
-        .map_err(|e| format!("Failed to parse built-in default config: {e}"))?;
+        .map_err(|e| format!("Failed to parse built-in default config: {e}"))
+}
+
+fn read_raw_config_doc() -> Result<Option<TomlValue>, String> {
+    let path = config_path()?;
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("Failed to read {}: {e}", path.display())),
+    };
+    let parsed = text
+        .parse::<TomlValue>()
+        .map_err(|e| format!("Failed to parse {}: {e}", path.display()))?;
+    Ok(Some(parsed))
+}
+
+fn merge_toml(defaults: &TomlValue, incoming: &TomlValue) -> TomlValue {
+    match (defaults, incoming) {
+        (TomlValue::Table(default_map), TomlValue::Table(incoming_map)) => {
+            let mut merged = default_map.clone();
+            for (key, value) in incoming_map {
+                let next = if let Some(existing) = merged.get(key) {
+                    merge_toml(existing, value)
+                } else {
+                    value.clone()
+                };
+                merged.insert(key.clone(), next);
+            }
+            TomlValue::Table(merged)
+        }
+        (_, incoming_value) => incoming_value.clone(),
+    }
+}
+
+fn effective_config_doc() -> Result<TomlValue, String> {
+    let defaults = parse_default_config()?;
+    match read_raw_config_doc()? {
+        Some(raw) => Ok(merge_toml(&defaults, &raw)),
+        None => Ok(defaults),
+    }
+}
+
+fn load_config_doc() -> Result<TomlValue, String> {
+    let default_cfg = parse_default_config()?;
 
     let path = config_path()?;
     let text = match fs::read_to_string(&path) {
@@ -73,6 +118,158 @@ fn load_config_doc() -> Result<TomlValue, String> {
             Ok(default_cfg)
         }
     }
+}
+
+fn require_table<'a>(cfg: &'a TomlValue, path: &str) -> Result<&'a TomlMap<String, TomlValue>, String> {
+    cfg.as_table()
+        .ok_or_else(|| format!("{path} must be a table"))
+}
+
+fn require_string(table: &TomlMap<String, TomlValue>, key: &str, path: &str) -> Result<String, String> {
+    table
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("{path}.{key} must be a string"))
+}
+
+fn require_int(table: &TomlMap<String, TomlValue>, key: &str, path: &str) -> Result<i64, String> {
+    table
+        .get(key)
+        .and_then(|v| v.as_integer())
+        .ok_or_else(|| format!("{path}.{key} must be an integer"))
+}
+
+fn require_float(table: &TomlMap<String, TomlValue>, key: &str, path: &str) -> Result<f64, String> {
+    table
+        .get(key)
+        .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+        .ok_or_else(|| format!("{path}.{key} must be a number"))
+}
+
+pub fn validate_document(cfg: &TomlValue) -> Result<(), String> {
+    let root = require_table(cfg, "root")?;
+
+    let version = require_int(root, "version", "root")?;
+    if version < 1 {
+        return Err("root.version must be >= 1".to_string());
+    }
+
+    let ipc = root
+        .get("ipc")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.ipc must be a table".to_string())?;
+    for key in ["stt_cmd", "stt_pub", "tts_cmd", "tts_events", "assistant_cmd"] {
+        let value = require_string(ipc, key, "root.ipc")?;
+        if !value.starts_with("ipc://") {
+            return Err(format!("root.ipc.{key} must start with 'ipc://'"));
+        }
+    }
+
+    let stt = root
+        .get("stt")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.stt must be a table".to_string())?;
+    let vad = require_float(stt, "vad_threshold", "root.stt")?;
+    if !(0.0..=1.0).contains(&vad) {
+        return Err("root.stt.vad_threshold must be in [0.0, 1.0]".to_string());
+    }
+    let gain = require_float(stt, "digital_gain", "root.stt")?;
+    if gain <= 0.0 {
+        return Err("root.stt.digital_gain must be > 0".to_string());
+    }
+    let stt_idle = require_int(stt, "model_idle_timeout_sec", "root.stt")?;
+    if stt_idle < 1 {
+        return Err("root.stt.model_idle_timeout_sec must be >= 1".to_string());
+    }
+
+    let tts = root
+        .get("tts")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.tts must be a table".to_string())?;
+    let defaults = tts
+        .get("defaults")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.tts.defaults must be a table".to_string())?;
+    let engine = require_string(defaults, "engine", "root.tts.defaults")?;
+    if !matches!(engine.as_str(), "kokoro" | "pocket-tts") {
+        return Err("root.tts.defaults.engine must be 'kokoro' or 'pocket-tts'".to_string());
+    }
+    let quality = require_string(defaults, "quality", "root.tts.defaults")?;
+    if !matches!(quality.as_str(), "low" | "high") {
+        return Err("root.tts.defaults.quality must be 'low' or 'high'".to_string());
+    }
+    let speed = require_float(defaults, "speed", "root.tts.defaults")?;
+    if !(0.5..=2.0).contains(&speed) {
+        return Err("root.tts.defaults.speed must be in [0.5, 2.0]".to_string());
+    }
+    let voice = require_string(defaults, "voice", "root.tts.defaults")?;
+    if voice.trim().is_empty() {
+        return Err("root.tts.defaults.voice must be non-empty".to_string());
+    }
+    let tts_idle = require_int(defaults, "idle_timeout_sec", "root.tts.defaults")?;
+    if tts_idle < 1 {
+        return Err("root.tts.defaults.idle_timeout_sec must be >= 1".to_string());
+    }
+
+    let assistant = root
+        .get("assistant")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.assistant must be a table".to_string())?;
+    let model = require_string(assistant, "default_model", "root.assistant")?;
+    if model.trim().is_empty() {
+        return Err("root.assistant.default_model must be non-empty".to_string());
+    }
+    let history_idle = require_int(assistant, "history_idle_timeout_sec", "root.assistant")?;
+    if history_idle < 1 {
+        return Err("root.assistant.history_idle_timeout_sec must be >= 1".to_string());
+    }
+
+    let instructions = assistant
+        .get("instructions")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.assistant.instructions must be a table".to_string())?;
+    for key in ["system_prompt", "tool_usage_policy"] {
+        let value = require_string(instructions, key, "root.assistant.instructions")?;
+        if value.trim().is_empty() {
+            return Err(format!("root.assistant.instructions.{key} must be non-empty"));
+        }
+    }
+
+    let tools = assistant
+        .get("tools")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.assistant.tools must be a table".to_string())?;
+    for (name, level_value) in tools {
+        let Some(level) = level_value.as_str() else {
+            return Err(format!("root.assistant.tools.{name} must be a string"));
+        };
+        if !matches!(level, "allow" | "ask" | "deny") {
+            return Err(format!("Invalid permission '{level}' for tool '{name}'"));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn show() -> Result<(), String> {
+    let cfg = effective_config_doc()?;
+    validate_document(&cfg)?;
+    let text = toml::to_string_pretty(&cfg).map_err(|e| format!("Failed to encode config TOML: {e}"))?;
+    println!("{text}");
+    Ok(())
+}
+
+pub fn validate() -> Result<(), String> {
+    let cfg = effective_config_doc()?;
+    validate_document(&cfg)?;
+    let path = config_path()?;
+    if path.exists() {
+        println!("Config is valid: {}", path.display());
+    } else {
+        println!("Config is valid (using built-in defaults): {}", path.display());
+    }
+    Ok(())
 }
 
 fn ensure_table<'a>(map: &'a mut TomlMap<String, TomlValue>, key: &str) -> &'a mut TomlMap<String, TomlValue> {
