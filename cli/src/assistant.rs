@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use crate::zmq_client;
+use crate::config;
 
 pub fn start(mode: &str, model: Option<&str>, engine: Option<&str>, voice: Option<&str>) {
     // Check if busy and interrupt if needed
@@ -88,14 +89,26 @@ pub fn list_tools() {
     }
 }
 
-pub fn set_tools(config: &str) {
-    let tools: Value = match serde_json::from_str(config) {
+pub fn set_tools(config_json: &str) {
+    let tools: Value = match serde_json::from_str(config_json) {
         Ok(v) => v,
         Err(e) => { eprintln!("Invalid JSON: {}", e); return; }
     };
     let cmd = json!({"command": "set_tools", "tools": tools});
     match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
-        Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
+        Ok(reply) => {
+            let is_error = reply.get("status").and_then(|v| v.as_str()) == Some("error");
+            if !is_error {
+                if let Some(tools_reply) = reply.get("tools") {
+                    if let Err(e) = config::persist_assistant_tools(tools_reply) {
+                        eprintln!("Warning: tools updated in service, but failed to persist config: {}", e);
+                    }
+                } else {
+                    eprintln!("Warning: tools updated in service, but reply missing tools for config persistence.");
+                }
+            }
+            println!("{}", serde_json::to_string_pretty(&reply).unwrap())
+        }
         Err(e) => eprintln!("Error: {}", e),
     }
 }
@@ -130,7 +143,19 @@ pub fn set_model(model: &str) {
 
     let cmd = json!({"command": "set_model", "model": resolved});
     match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
-        Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
+        Ok(reply) => {
+            let is_error = reply.get("status").and_then(|v| v.as_str()) == Some("error");
+            if !is_error {
+                if let Some(model) = reply.get("model").and_then(|v| v.as_str()) {
+                    if let Err(e) = config::persist_assistant_model(model) {
+                        eprintln!("Warning: model updated in service, but failed to persist config: {}", e);
+                    }
+                } else {
+                    eprintln!("Warning: model updated in service, but reply missing model for config persistence.");
+                }
+            }
+            println!("{}", serde_json::to_string_pretty(&reply).unwrap())
+        }
         Err(e) => eprintln!("Error: {}", e),
     }
 }

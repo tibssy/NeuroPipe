@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod zmq_client;
+mod config;
 mod tts;
 mod stt;
 mod assistant;

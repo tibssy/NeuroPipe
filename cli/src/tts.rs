@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 use serde_json::{json, Value};
 use crate::zmq_client;
+use crate::config;
 
 pub fn speak(text: &str, voice: Option<&str>, speed: Option<f64>, quality: Option<&str>, engine: Option<&str>, monitor: bool) {
     let mut cmd = json!({"command": "speak", "text": text});
@@ -124,7 +125,27 @@ pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, 
     if let Some(s) = speed { cmd["speed"] = json!(s); }
     if let Some(q) = quality { cmd["quality"] = json!(q); }
     match zmq_client::send_cmd(zmq_client::tts_cmd(), &cmd) {
-        Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
+        Ok(reply) => {
+            let is_error = reply.get("status").and_then(|v| v.as_str()) == Some("error");
+            if !is_error {
+                let engine = reply.get("engine").and_then(|v| v.as_str());
+                let voice = reply.get("voice").and_then(|v| v.as_str());
+                let speed = reply.get("speed").and_then(|v| v.as_f64());
+                let quality = reply.get("quality").and_then(|v| v.as_str());
+
+                match (engine, voice, speed, quality) {
+                    (Some(engine), Some(voice), Some(speed), Some(quality)) => {
+                        if let Err(e) = config::persist_tts_defaults(engine, voice, speed, quality) {
+                            eprintln!("Warning: state updated in service, but failed to persist config: {}", e);
+                        }
+                    }
+                    _ => {
+                        eprintln!("Warning: state updated in service, but reply missing fields for config persistence.");
+                    }
+                }
+            }
+            println!("{}", serde_json::to_string_pretty(&reply).unwrap());
+        }
         Err(e) => eprintln!("Error: {}", e),
     }
 }
