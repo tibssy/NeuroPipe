@@ -13,6 +13,7 @@ uv run python -m nuitka --onefile \
   --include-distribution-metadata=onnxruntime \
   --include-distribution-metadata=safetensors \
   --include-distribution-metadata=sentencepiece \
+  --include-module=neuropipe_config \
   --output-dir=dist \
   --output-filename=neuro-tts-service \
   --assume-yes-for-downloads \

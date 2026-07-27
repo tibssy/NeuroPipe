@@ -5,6 +5,7 @@ import sounddevice as sd
 import threading
 import queue
 import subprocess as sp
+import neuropipe_config
 
 # Engine Imports
 from engines.kokoro import KokoroEngine
@@ -12,9 +13,12 @@ from engines.pocket_tts import PocketTTSEngine
 # from engines.piper import PiperEngine
 
 # --- CONFIG ---
+CFG = neuropipe_config.load()
+TTS_CFG = CFG["tts"]
+
 CMD_ADDR = "ipc:///tmp/neuropipe_tts_cmd.sock"
 PUB_ADDR = "ipc:///tmp/neuropipe_tts_events.sock"
-IDLE_TIMEOUT = 60
+IDLE_TIMEOUT = TTS_CFG["idle_timeout"]
 
 
 class TTSService:
@@ -45,10 +49,10 @@ class TTSService:
         self.last_activity = time.time()
 
         # Defaults (can be changed via set_state)
-        self.default_engine = "kokoro"
-        self.default_voice = "af_bella"
-        self.default_speed = 1.0
-        self.default_quality = "high"
+        self.default_engine = TTS_CFG["engine"]
+        self.default_voice = TTS_CFG["voice"]
+        self.default_speed = TTS_CFG["speed"]
+        self.default_quality = TTS_CFG["quality"]
 
         # Start Player
         threading.Thread(target=self._player_loop, daemon=True).start()
