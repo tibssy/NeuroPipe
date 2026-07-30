@@ -16,7 +16,7 @@ Voice assistant daemon for NeuroPipe. Connects STT → Ollama → TTS into a con
   - **MODE2** — interruptable by IPC `interrupt` or new voice input
 - History persists across sessions and auto-clears after 1h of inactivity
 - Ollama model, TTS engine, and TTS voice configurable via client
-- Optional long-term memory via local Qdrant with embeddings from Ollama (`embeddinggemma` by default)
+- Optional long-term memory via local Qdrant with embeddings from Ollama (`all-minilm` by default)
 
 ## Commands
 

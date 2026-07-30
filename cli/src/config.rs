@@ -53,7 +53,7 @@ max_summary_chars = 1200
 retrieve_top_k = 4
 qdrant_path = "~/.local/share/neuropipe/memory/qdrant"
 collection = "assistant_memory"
-embedding_model = "embeddinggemma"
+embedding_model = "all-minilm"
 
 [assistant.instructions]
 system_prompt = """

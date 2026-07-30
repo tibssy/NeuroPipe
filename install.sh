@@ -110,6 +110,11 @@ print_dependency_install_hint() {
       printf "  Install required packages manually for your distro.\n"
       ;;
   esac
+
+  if [[ "$profile" == "build" ]]; then
+    printf "  # Rust toolchain (cargo)\n"
+    printf "  curl https://sh.rustup.rs -sSf | sh\n"
+  fi
 }
 
 check_runtime_dependencies() {
@@ -136,6 +141,7 @@ check_build_dependencies() {
   command -v gcc >/dev/null 2>&1 || missing+=("gcc")
   command -v g++ >/dev/null 2>&1 || missing+=("g++")
   command -v make >/dev/null 2>&1 || missing+=("make")
+  command -v cargo >/dev/null 2>&1 || missing+=("cargo")
   command -v patchelf >/dev/null 2>&1 || missing+=("patchelf")
   command -v ccache >/dev/null 2>&1 || missing+=("ccache")
 
@@ -248,6 +254,41 @@ install_cli_binary() {
   printf "\e[32mInstalled binary: %s/neuro-ipc\e[0m\n" "$LOCAL_BIN_DIR"
 }
 
+build_cli_binary() {
+  local target_binary="$CLI_DIR/target/release/neuro-ipc"
+
+  if ! command -v cargo &>/dev/null; then
+    printf "\e[31mError: cargo is required to build neuro-ipc from source.\e[0m\n"
+    printf "\e[33mInstall Rust via https://rustup.rs and run installer again.\e[0m\n"
+    return 1
+  fi
+
+  printf "\n\e[34mBuilding neuro-ipc from source...\e[0m\n"
+  (cd "$CLI_DIR" && cargo build --release) || {
+    printf "\e[31mRust build failed. Install Rust via https://rustup.rs\e[0m\n"
+    return 1
+  }
+
+  if [[ ! -f "$target_binary" ]]; then
+    printf "\e[31mError: Built CLI binary not found at %s\e[0m\n" "$target_binary"
+    return 1
+  fi
+
+  printf "\e[32mBuild verification passed: %s\e[0m\n" "$target_binary"
+}
+
+install_cli_binary_from_source() {
+  local target_binary="$CLI_DIR/target/release/neuro-ipc"
+
+  if [[ ! -f "$target_binary" ]]; then
+    printf "\e[31mError: Cannot install, missing CLI binary at %s\e[0m\n" "$target_binary"
+    return 1
+  fi
+
+  install -Dm755 "$target_binary" "$LOCAL_BIN_DIR/neuro-ipc"
+  printf "\e[32mInstalled binary: %s/neuro-ipc\e[0m\n" "$LOCAL_BIN_DIR"
+}
+
 install_default_config() {
   local config_template="$ROOT_DIR/config.example.toml"
 
@@ -299,6 +340,16 @@ install_tool_plugins() {
     fi
   done
   printf "\e[0m\n"
+}
+
+pull_assistant_embedding_model() {
+  local model_name="all-minilm"
+
+  require_command ollama
+
+  printf "\n\e[34mPulling Ollama embedding model (%s)...\e[0m\n" "$model_name"
+  ollama pull "$model_name"
+  printf "\e[32mPulled Ollama model: %s\e[0m\n" "$model_name"
 }
 
 handle_pocket_tts_voices() {
@@ -537,6 +588,8 @@ run_build_flow() {
       ;;
   esac
 
+  build_cli_binary
+
   prompt_install_approval "Build artifacts"
   prepare_install_dirs
 
@@ -556,11 +609,12 @@ run_build_flow() {
       install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
       ;;
   esac
-  install_cli_binary
+  install_cli_binary_from_source
   install_default_config
 
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
     install_tool_plugins
+    pull_assistant_embedding_model
   fi
 
   enable_and_start_services
@@ -631,6 +685,7 @@ run_prebuilt_flow() {
 
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
     install_tool_plugins
+    pull_assistant_embedding_model
   fi
 
   enable_and_start_services

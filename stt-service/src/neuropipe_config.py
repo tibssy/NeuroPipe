@@ -34,7 +34,7 @@ DEFAULT_CONFIG = {
             "retrieve_top_k": 4,
             "qdrant_path": "~/.local/share/neuropipe/memory/qdrant",
             "collection": "assistant_memory",
-            "embedding_model": "embeddinggemma",
+            "embedding_model": "all-minilm",
         },
         "instructions": {
             "system_prompt": "You are a helpful AI voice assistant.\nKeep answers short and conversational.\n/set nothink",
