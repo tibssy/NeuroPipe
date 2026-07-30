@@ -46,10 +46,14 @@ DEFAULT_CONFIG = {
             "embedding_model": "all-minilm",
         },
         "instructions": {
-            "system_prompt": "You are a helpful AI voice assistant.\nKeep answers short and conversational.\n/set nothink",
-            "tool_usage_policy": "When the user asks about something a tool can help with, call the appropriate tool automatically. Do not ask for permission.",
+            "system_prompt": "You are a helpful AI voice assistant.\nKeep answers short and conversational.\nThis is a voice-to-voice conversation: assume the user replies by speaking, not typing.\nIf you need confirmation (for example before using a tool in ask mode), request a spoken yes/no response and never ask the user to type.\n/set nothink",
+            "tool_usage_policy": "When the user asks about something a tool can help with, call the appropriate tool automatically. If a tool is in ask mode, request spoken permission (yes/no) and continue based on the user's voice response. Do not ask the user to type permission commands.",
         },
-        "tools": {},
+        "tools": {
+            "open_url": "ask",
+            "screenshot": "ask",
+            "web_search": "ask",
+        },
     },
 }
 
