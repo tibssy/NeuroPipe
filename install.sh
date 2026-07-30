@@ -16,6 +16,7 @@ RELEASE_API_URL="https://api.github.com/repos/tibssy/NeuroPipe/releases/latest"
 
 declare -a SERVICE_UNITS=()
 PKG_MANAGER=""
+ASSISTANT_DEFAULT_MODEL_OVERRIDE=""
 
 clear_screen() {
   if command -v clear >/dev/null 2>&1; then
@@ -305,7 +306,78 @@ install_default_config() {
   fi
 
   install -Dm644 "$config_template" "$NEUROPIPE_CONFIG_FILE"
+
+  if [[ -n "$ASSISTANT_DEFAULT_MODEL_OVERRIDE" ]]; then
+    local tmp_file
+    tmp_file="$(mktemp)"
+    local replaced=false
+    local line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$replaced" == false && "$line" =~ ^default_model[[:space:]]*= ]]; then
+        printf 'default_model = "%s"\n' "$ASSISTANT_DEFAULT_MODEL_OVERRIDE" >> "$tmp_file"
+        replaced=true
+      else
+        printf '%s\n' "$line" >> "$tmp_file"
+      fi
+    done < "$NEUROPIPE_CONFIG_FILE"
+    mv "$tmp_file" "$NEUROPIPE_CONFIG_FILE"
+  fi
+
   printf "\e[32mInstalled default config: %s\e[0m\n" "$NEUROPIPE_CONFIG_FILE"
+}
+
+select_assistant_default_model() {
+  local default_model="llama3.2:1b"
+
+  ASSISTANT_DEFAULT_MODEL_OVERRIDE=""
+
+  if ! command -v ollama &>/dev/null; then
+    printf "\e[33mWarning: ollama not found, using default assistant model: %s\e[0m\n" "$default_model"
+    ASSISTANT_DEFAULT_MODEL_OVERRIDE="$default_model"
+    return 0
+  fi
+
+  local ollama_output
+  if ! ollama_output="$(ollama list 2>/dev/null)"; then
+    printf "\e[33mWarning: failed to run 'ollama list', using default assistant model: %s\e[0m\n" "$default_model"
+    ASSISTANT_DEFAULT_MODEL_OVERRIDE="$default_model"
+    return 0
+  fi
+
+  local -a models=()
+  local line
+  local name
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    [[ "$line" =~ ^NAME[[:space:]]+ID[[:space:]]+SIZE[[:space:]]+MODIFIED ]] && continue
+    name="${line%%[[:space:]]*}"
+    [[ -z "$name" ]] && continue
+    models+=("$name")
+  done <<< "$ollama_output"
+
+  if [[ ${#models[@]} -eq 0 ]]; then
+    printf "\e[33mWarning: no Ollama models found. Using default assistant model: %s\e[0m\n" "$default_model"
+    ASSISTANT_DEFAULT_MODEL_OVERRIDE="$default_model"
+    return 0
+  fi
+
+  printf "\n\e[36mSelect default assistant model (from ollama list):\e[0m\n"
+  local i
+  for i in "${!models[@]}"; do
+    printf "  %d) %s\n" "$((i + 1))" "${models[$i]}"
+  done
+
+  local choice
+  while true; do
+    printf "\e[36mEnter model number [1-%d]: \e[0m" "${#models[@]}"
+    read -r choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#models[@]} )); then
+      ASSISTANT_DEFAULT_MODEL_OVERRIDE="${models[$((choice - 1))]}"
+      printf "\e[32mSelected default assistant model: %s\e[0m\n" "$ASSISTANT_DEFAULT_MODEL_OVERRIDE"
+      return 0
+    fi
+    printf "\e[31mInvalid selection. Please enter a number between 1 and %d.\e[0m\n" "${#models[@]}"
+  done
 }
 
 install_tool_plugins() {
@@ -567,6 +639,10 @@ run_build_flow() {
   verify_build_prerequisites
   SERVICE_UNITS=()
 
+  if [[ "$selection" == "3" || "$selection" == "4" ]]; then
+    select_assistant_default_model
+  fi
+
   case "$selection" in
     1)
       build_component "TTS Service" "$TTS_DIR" "neuro-tts-service" "neuropipe-tts.service"
@@ -610,12 +686,13 @@ run_build_flow() {
       ;;
   esac
   install_cli_binary_from_source
-  install_default_config
 
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
     install_tool_plugins
     pull_assistant_embedding_model
   fi
+
+  install_default_config
 
   enable_and_start_services
 
@@ -635,6 +712,10 @@ run_prebuilt_flow() {
   verify_prebuilt_prerequisites
   release_arch="$(detect_linux_arch)"
   SERVICE_UNITS=()
+
+  if [[ "$selection" == "3" || "$selection" == "4" ]]; then
+    select_assistant_default_model
+  fi
 
   case "$selection" in
     1)
@@ -681,12 +762,13 @@ run_prebuilt_flow() {
       ;;
   esac
   install_cli_binary
-  install_default_config
 
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
     install_tool_plugins
     pull_assistant_embedding_model
   fi
+
+  install_default_config
 
   enable_and_start_services
 
