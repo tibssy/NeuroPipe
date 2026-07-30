@@ -16,6 +16,7 @@ Voice assistant daemon for NeuroPipe. Connects STT → Ollama → TTS into a con
   - **MODE2** — interruptable by IPC `interrupt` or new voice input
 - History persists across sessions and auto-clears after 1h of inactivity
 - Ollama model, TTS engine, and TTS voice configurable via client
+- Optional long-term memory via local Qdrant with embeddings from Ollama (`embeddinggemma` by default)
 
 ## Commands
 
@@ -26,6 +27,8 @@ Voice assistant daemon for NeuroPipe. Connects STT → Ollama → TTS into a con
 | `interrupt` | — | Stop current AI response, stay in mode |
 | `stop` | — | Stop session, set STT to IDLE |
 | `get_state` | — | Return mode, busy, model, engine, voice |
+| `get_history` | — | Return current in-memory session history |
+| `reset_memory` | — | Delete long-term memory vectors for assistant collection |
 
 Configuration is persisted to `~/.config/neuropipe/config.toml` when using `neuro-ipc assistant set-model` and `neuro-ipc assistant set-tools`.
 

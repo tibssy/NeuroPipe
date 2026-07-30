@@ -2,6 +2,7 @@ import zmq
 import re
 import os
 import time
+import hashlib
 import threading
 import httpx
 import subprocess as sp
@@ -10,6 +11,7 @@ from ollama import Client
 
 from tool_manager import ToolManager
 from neuropipe_config import load_config
+from memory_store import MemoryStore
 
 OLLAMA_SOCK = "/tmp/ollama.sock"
 if os.path.exists(OLLAMA_SOCK):
@@ -20,6 +22,16 @@ else:
 
 def chat(*args, **kwargs):
     return _ollama.chat(*args, **kwargs)
+
+
+def embed_texts(model: str, texts: list[str]) -> list[list[float]]:
+    response = _ollama.embed(model=model, input=texts)
+    vectors = getattr(response, "embeddings", None)
+    if vectors is None and isinstance(response, dict):
+        vectors = response.get("embeddings")
+    if not isinstance(vectors, list):
+        raise RuntimeError("Ollama embed response did not contain embeddings")
+    return vectors
 
 SENTENCE_END = re.compile(r'[.!?](?:\s|$)')
 
@@ -88,6 +100,14 @@ class AssistantService:
         self._pending_sentences = 0
         self._spoken_buffer = []
         self._spoken_lock = threading.Lock()
+        self.memory_config = self.config["assistant"]["memory"]
+        self.memory_store = MemoryStore(
+            self.memory_config["qdrant_path"],
+            self.memory_config["collection"],
+            self.memory_config["embedding_model"],
+            embed_texts,
+        )
+        self.last_memory_digest = ""
 
         # External tool plugins
         self.tool_manager = ToolManager(initial_config=self.config["assistant"].get("tools", {}))
@@ -160,7 +180,141 @@ class AssistantService:
         if content:
             self.history.append({'role': 'assistant', 'content': content})
 
-    def _stream_and_speak(self, tools, round_num=0):
+    def _is_cloud_model(self, model: str) -> bool:
+        return isinstance(model, str) and model.endswith(":cloud")
+
+    def _memory_allowed_for_model(self, model: str) -> bool:
+        if self._is_cloud_model(model):
+            return self.memory_config["enabled_cloud"]
+        return self.memory_config["enabled_local"]
+
+    def _memory_allowed(self) -> bool:
+        return self._memory_allowed_for_model(self.ollama_model)
+
+    def _build_session_transcript(self) -> str:
+        lines = []
+        for entry in self.history[1:]:
+            role = entry.get("role", "")
+            content = (entry.get("content") or "").strip()
+            if not content:
+                continue
+            if role == "tool":
+                tool_name = entry.get("tool_name", "tool")
+                lines.append(f"[tool:{tool_name}] {content}")
+            else:
+                lines.append(f"[{role}] {content}")
+        return "\n".join(lines)
+
+    def _fallback_summary(self, transcript: str) -> str:
+        chunks = []
+        for line in transcript.splitlines():
+            text = line.strip()
+            if text:
+                chunks.append(text)
+        summary = " ".join(chunks)
+        limit = int(self.memory_config["max_summary_chars"])
+        if len(summary) <= limit:
+            return summary
+        return summary[: limit - 3].rstrip() + "..."
+
+    def _summarize_history_for_memory(self) -> str:
+        transcript = self._build_session_transcript()
+        if not transcript:
+            return ""
+
+        limit = int(self.memory_config["max_summary_chars"])
+        prompt = (
+            "Summarize this conversation into compact long-term memory notes. "
+            "Keep only durable facts, explicit preferences, stable context, and useful follow-ups. "
+            "Do not include filler, greetings, or tool errors unless they matter to future help. "
+            "Write plain text, short bullet-style sentences, max "
+            f"{limit} characters."
+        )
+        try:
+            reply = chat(
+                model=self.ollama_model,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": transcript},
+                ],
+                stream=False,
+            )
+            message = getattr(reply, "message", None)
+            content = getattr(message, "content", "") if message else ""
+            if not content and isinstance(reply, dict):
+                content = ((reply.get("message") or {}).get("content") or "")
+            content = content.strip()
+            if not content:
+                return self._fallback_summary(transcript)
+            if len(content) > limit:
+                content = content[: limit - 3].rstrip() + "..."
+            return content
+        except Exception as e:
+            print(f"[memory] LLM summarization failed: {e}")
+            return self._fallback_summary(transcript)
+
+    def _maybe_persist_memory(self, trigger: str):
+        if trigger == "idle_timeout" and not self.memory_config["summarize_on_idle"]:
+            return
+        if trigger == "stop" and not self.memory_config["summarize_on_stop"]:
+            return
+        if not self._memory_allowed():
+            return
+
+        summary = self._summarize_history_for_memory()
+        if len(summary) < 24:
+            return
+
+        digest = hashlib.sha256(summary.encode("utf-8")).hexdigest()
+        if digest == self.last_memory_digest:
+            return
+
+        try:
+            saved = self.memory_store.add_summary(
+                summary,
+                {
+                    "trigger": trigger,
+                    "model": self.ollama_model,
+                    "mode": self.mode,
+                    "cloud_model": str(self._is_cloud_model(self.ollama_model)).lower(),
+                },
+            )
+            if saved:
+                self.last_memory_digest = digest
+                print(f"[memory] Saved summary ({trigger})")
+        except Exception as e:
+            print(f"[memory] Failed to save summary: {e}")
+
+    def _build_memory_context(self, query: str) -> str | None:
+        if not self._memory_allowed():
+            return None
+
+        query = query.strip()
+        if not query:
+            return None
+
+        try:
+            results = self.memory_store.search(query, int(self.memory_config["retrieve_top_k"]))
+        except Exception as e:
+            print(f"[memory] Failed to search memory: {e}")
+            return None
+
+        snippets = []
+        for result in results:
+            text = (result.get("document") or "").strip()
+            if text:
+                snippets.append(f"- {text}")
+
+        if not snippets:
+            return None
+
+        return (
+            "Relevant long-term memory from prior sessions. "
+            "Use it only when helpful and avoid fabricating details.\n"
+            + "\n".join(snippets)
+        )
+
+    def _stream_and_speak(self, tools, round_num=0, memory_context=None):
         full_response = ""
         sentence_buffer = ""
         called_tools = []
@@ -171,7 +325,15 @@ class AssistantService:
         MAX_BATCH_CHARS = 150
         is_first = True
 
-        kwargs = {"model": self.ollama_model, "messages": self.history, "stream": True}
+        request_messages = list(self.history)
+        if memory_context:
+            memory_msg = {'role': 'system', 'content': memory_context}
+            if request_messages and request_messages[0].get('role') == 'system':
+                request_messages = [request_messages[0], memory_msg, *request_messages[1:]]
+            else:
+                request_messages = [memory_msg, *request_messages]
+
+        kwargs = {"model": self.ollama_model, "messages": request_messages, "stream": True}
         if tools and round_num == 0:
             kwargs["tools"] = tools
 
@@ -272,11 +434,16 @@ class AssistantService:
             print("[Auto-granted permission for all 'ask' tools this session]")
 
         self.history.append({'role': 'user', 'content': text})
+        memory_context = self._build_memory_context(text)
 
         tools = self.tool_manager.active_definitions() or None
 
         for round_num in range(3):
-            called_tools, spoken = self._stream_and_speak(tools, round_num)
+            called_tools, spoken = self._stream_and_speak(
+                tools,
+                round_num,
+                memory_context if round_num == 0 else None,
+            )
             if called_tools is None:
                 return
 
@@ -342,6 +509,7 @@ class AssistantService:
         idle = time.time() - self.last_activity > self.config["assistant"]["history_idle_timeout_sec"]
         if idle:
             print("Idle > 1h, clearing history.")
+            self._maybe_persist_memory("idle_timeout")
         self.tool_manager.reset_session()
         # Only reset history on first start or idle timeout — preserve on mode switches
         if idle or len(self.history) <= 1:
@@ -362,13 +530,27 @@ class AssistantService:
         sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Listening"], capture_output=True)
 
     def stop(self):
+        if self.mode == "IDLE" and not self.is_busy():
+            return
         self.cancel_event.set()
         self.stop_tts()
         if self.is_busy():
             self.interrupt()
+        self._maybe_persist_memory("stop")
         self.set_stt_mode("IDLE")
+        self.tool_manager.reset_session()
+        self.history = [_build_system_message([], self.config["assistant"]["instructions"])]
         self.mode = "IDLE"
         sp.run(["notify-send", "-h", "boolean:transient:true", "NeuroPipe", "Idle"], capture_output=True)
+
+    def get_history(self):
+        return [dict(entry) for entry in self.history]
+
+    def reset_longterm_memory(self):
+        result = self.memory_store.reset()
+        if result.get("status") == "ok":
+            self.last_memory_digest = ""
+        return result
 
     def _process_and_respond(self, text):
         self._pending_sentences = 0
@@ -525,6 +707,17 @@ class AssistantService:
                                 "speed": tts_state.get("speed"),
                                 "quality": tts_state.get("quality"),
                             })
+
+                        elif cmd == "get_history":
+                            history = self.get_history()
+                            self.cmd_socket.send_json({
+                                "history": history,
+                                "count": len(history),
+                            })
+
+                        elif cmd == "reset_memory":
+                            result = self.reset_longterm_memory()
+                            self.cmd_socket.send_json(result)
                     except Exception as e:
                         print(f"Command error: {e}")
                         self.cmd_socket.send_json(
@@ -551,6 +744,10 @@ class AssistantService:
                 self.stop()
             except Exception as e:
                 print(f"Shutdown error: {e}")
+            try:
+                self.memory_store.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

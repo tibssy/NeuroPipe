@@ -9,5 +9,6 @@ dependencies = [
     "nuitka>=2.8.9",
     "ollama>=0.6.1",
     "pyzmq>=27.1.0",
+    "qdrant-client>=1.11.1",
     "zstandard>=0.25.0",
 ]

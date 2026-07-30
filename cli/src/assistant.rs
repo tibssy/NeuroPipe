@@ -50,6 +50,22 @@ pub fn get_state() {
     }
 }
 
+pub fn get_history() {
+    let cmd = json!({"command": "get_history"});
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
+        Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+
+pub fn reset_memory() {
+    let cmd = json!({"command": "reset_memory"});
+    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
+        Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+
 fn cycle_model(direction: &str) -> Option<String> {
     let reply = zmq_client::send_cmd(zmq_client::assistant_cmd(), &json!({"command": "list_models"})).ok()?;
     let models = reply.get("models")?.as_array()?;

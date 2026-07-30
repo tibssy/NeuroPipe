@@ -36,6 +36,22 @@ history_idle_timeout_sec = 3600
 # Empty list means cycle all available models.
 models = []
 
+[assistant.memory]
+# Privacy gate based on model type:
+# - local models: controlled by enabled_local
+# - cloud models (suffix :cloud): controlled by enabled_cloud
+# If disabled for the active model type, the assistant will not read from
+# or write to long-term memory.
+enabled_local = true
+enabled_cloud = false
+summarize_on_idle = true
+summarize_on_stop = true
+max_summary_chars = 1200
+retrieve_top_k = 4
+qdrant_path = "~/.local/share/neuropipe/memory/qdrant"
+collection = "assistant_memory"
+embedding_model = "embeddinggemma"
+
 [assistant.instructions]
 system_prompt = """
 You are a helpful AI voice assistant.

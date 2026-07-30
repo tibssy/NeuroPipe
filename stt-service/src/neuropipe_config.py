@@ -22,6 +22,26 @@ DEFAULT_CONFIG = {
         "digital_gain": 3.0,
         "model_idle_timeout_sec": 60,
     },
+    "assistant": {
+        "default_model": "llama3.2:1b",
+        "history_idle_timeout_sec": 3600,
+        "memory": {
+            "enabled_local": True,
+            "enabled_cloud": False,
+            "summarize_on_idle": True,
+            "summarize_on_stop": True,
+            "max_summary_chars": 1200,
+            "retrieve_top_k": 4,
+            "qdrant_path": "~/.local/share/neuropipe/memory/qdrant",
+            "collection": "assistant_memory",
+            "embedding_model": "embeddinggemma",
+        },
+        "instructions": {
+            "system_prompt": "You are a helpful AI voice assistant.\nKeep answers short and conversational.\n/set nothink",
+            "tool_usage_policy": "When the user asks about something a tool can help with, call the appropriate tool automatically. Do not ask for permission.",
+        },
+        "tools": {},
+    },
 }
 
 

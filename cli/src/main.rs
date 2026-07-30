@@ -115,6 +115,8 @@ enum AssistantAction {
     Interrupt,
     Stop,
     GetState,
+    GetHistory,
+    ResetMemory,
     ListModels,
     SetModel {
         model: String,
@@ -164,6 +166,8 @@ fn main() {
             AssistantAction::Interrupt => assistant::interrupt(),
             AssistantAction::Stop => assistant::stop(),
             AssistantAction::GetState => assistant::get_state(),
+            AssistantAction::GetHistory => assistant::get_history(),
+            AssistantAction::ResetMemory => assistant::reset_memory(),
             AssistantAction::ListModels => assistant::list_models(),
             AssistantAction::SetModel { model } => assistant::set_model(&model),
             AssistantAction::ListTools => assistant::list_tools(),
