@@ -647,8 +647,11 @@ class AssistantService:
                             )
 
                         elif cmd == "stop":
-                            self.stop()
                             self.cmd_socket.send_json({"status": "stopped"})
+                            try:
+                                self.stop()
+                            except Exception as e:
+                                print(f"Stop error: {e}")
 
                         elif cmd == "list_models":
                             result = _ollama.list()

@@ -36,7 +36,7 @@ pub fn interrupt() {
 
 pub fn stop() {
     let cmd = json!({"command": "stop"});
-    match zmq_client::send_cmd(zmq_client::assistant_cmd(), &cmd) {
+    match zmq_client::send_cmd_with_timeout(zmq_client::assistant_cmd(), &cmd, 30000) {
         Ok(reply) => println!("{}", serde_json::to_string_pretty(&reply).unwrap()),
         Err(e) => eprintln!("Error: {}", e),
     }

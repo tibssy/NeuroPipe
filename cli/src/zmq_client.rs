@@ -91,9 +91,13 @@ pub fn assistant_cmd() -> &'static str {
 }
 
 pub fn send_cmd(addr: &str, cmd: &Value) -> Result<Value, String> {
+    send_cmd_with_timeout(addr, cmd, 5000)
+}
+
+pub fn send_cmd_with_timeout(addr: &str, cmd: &Value, timeout_ms: i32) -> Result<Value, String> {
     let ctx = zmq::Context::new();
     let socket = ctx.socket(zmq::REQ).map_err(|e| e.to_string())?;
-    socket.set_rcvtimeo(5000).map_err(|e| e.to_string())?;
+    socket.set_rcvtimeo(timeout_ms).map_err(|e| e.to_string())?;
     socket.connect(addr).map_err(|e| e.to_string())?;
     let payload = serde_json::to_vec(cmd).map_err(|e| e.to_string())?;
     socket.send(&payload, 0).map_err(|e| e.to_string())?;

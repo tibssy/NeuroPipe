@@ -74,35 +74,35 @@ print_dependency_install_hint() {
   case "$PKG_MANAGER" in
     pacman)
       if [[ "$profile" == "runtime" ]]; then
-        printf "  sudo pacman -S --needed wtype wl-clipboard pipewire\n"
+        printf "  sudo pacman -S --needed systemd\n"
       else
         printf "  sudo pacman -S --needed base-devel python patchelf ccache\n"
       fi
       ;;
     apt)
       if [[ "$profile" == "runtime" ]]; then
-        printf "  sudo apt-get install -y wtype wl-clipboard pipewire\n"
+        printf "  sudo apt-get install -y systemd\n"
       else
         printf "  sudo apt-get install -y build-essential python3 patchelf ccache\n"
       fi
       ;;
     dnf)
       if [[ "$profile" == "runtime" ]]; then
-        printf "  sudo dnf install -y wtype wl-clipboard pipewire\n"
+        printf "  sudo dnf install -y systemd\n"
       else
         printf "  sudo dnf install -y gcc gcc-c++ make python3 patchelf ccache\n"
       fi
       ;;
     zypper)
       if [[ "$profile" == "runtime" ]]; then
-        printf "  sudo zypper install -y wtype wl-clipboard pipewire\n"
+        printf "  sudo zypper install -y systemd\n"
       else
         printf "  sudo zypper install -y gcc gcc-c++ make python3 patchelf ccache\n"
       fi
       ;;
     apk)
       if [[ "$profile" == "runtime" ]]; then
-        printf "  sudo apk add wtype wl-clipboard pipewire\n"
+        printf "  sudo apk add systemd\n"
       else
         printf "  sudo apk add build-base python3 patchelf ccache\n"
       fi
@@ -118,23 +118,34 @@ print_dependency_install_hint() {
   fi
 }
 
+selection_has_assistant() {
+  local selection="$1"
+  [[ "$selection" == "3" || "$selection" == "4" ]]
+}
+
 check_runtime_dependencies() {
+  local selection="$1"
   local -a missing=()
 
   command -v systemctl >/dev/null 2>&1 || missing+=("systemctl")
-  command -v wtype >/dev/null 2>&1 || missing+=("wtype")
-  command -v wl-copy >/dev/null 2>&1 || missing+=("wl-copy (wl-clipboard)")
-  command -v pw-cli >/dev/null 2>&1 || missing+=("pw-cli (pipewire)")
+
+  if selection_has_assistant "$selection"; then
+    command -v ollama >/dev/null 2>&1 || missing+=("ollama")
+  fi
 
   if [[ ${#missing[@]} -gt 0 ]]; then
-    printf "\e[31mError: Missing runtime dependencies:\e[0m\n"
+    printf "\e[31mError: Missing required dependencies:\e[0m\n"
     printf "  - %s\n" "${missing[@]}"
     print_dependency_install_hint "runtime"
+    if selection_has_assistant "$selection"; then
+      printf "  Install Ollama: https://ollama.com/download\n"
+    fi
     return 1
   fi
 }
 
 check_build_dependencies() {
+  local selection="$1"
   local -a missing=()
 
   command -v uv >/dev/null 2>&1 || missing+=("uv")
@@ -147,21 +158,27 @@ check_build_dependencies() {
   command -v ccache >/dev/null 2>&1 || missing+=("ccache")
 
   if [[ ${#missing[@]} -gt 0 ]]; then
-    printf "\e[31mError: Missing build dependencies:\e[0m\n"
+    printf "\e[31mError: Missing required build dependencies:\e[0m\n"
     printf "  - %s\n" "${missing[@]}"
     print_dependency_install_hint "build"
     return 1
   fi
+
+  if selection_has_assistant "$selection"; then
+    require_command ollama
+  fi
 }
 
 verify_build_prerequisites() {
-  check_runtime_dependencies
-  check_build_dependencies
+  local selection="$1"
+  check_runtime_dependencies "$selection"
+  check_build_dependencies "$selection"
 }
 
 verify_prebuilt_prerequisites() {
+  local selection="$1"
   require_command curl
-  check_runtime_dependencies
+  check_runtime_dependencies "$selection"
 }
 
 prepare_install_dirs() {
@@ -331,17 +348,10 @@ select_assistant_default_model() {
 
   ASSISTANT_DEFAULT_MODEL_OVERRIDE=""
 
-  if ! command -v ollama &>/dev/null; then
-    printf "\e[33mWarning: ollama not found, using default assistant model: %s\e[0m\n" "$default_model"
-    ASSISTANT_DEFAULT_MODEL_OVERRIDE="$default_model"
-    return 0
-  fi
-
   local ollama_output
   if ! ollama_output="$(ollama list 2>/dev/null)"; then
-    printf "\e[33mWarning: failed to run 'ollama list', using default assistant model: %s\e[0m\n" "$default_model"
-    ASSISTANT_DEFAULT_MODEL_OVERRIDE="$default_model"
-    return 0
+    printf "\e[31mError: failed to run 'ollama list'. Make sure Ollama is installed and running.\e[0m\n"
+    return 1
   fi
 
   local -a models=()
@@ -356,9 +366,8 @@ select_assistant_default_model() {
   done <<< "$ollama_output"
 
   if [[ ${#models[@]} -eq 0 ]]; then
-    printf "\e[33mWarning: no Ollama models found. Using default assistant model: %s\e[0m\n" "$default_model"
-    ASSISTANT_DEFAULT_MODEL_OVERRIDE="$default_model"
-    return 0
+    printf "\e[31mError: no Ollama models found. Pull one first (for example: ollama pull %s).\e[0m\n" "$default_model"
+    return 1
   fi
 
   printf "\n\e[36mSelect default assistant model (from ollama list):\e[0m\n"
@@ -636,7 +645,7 @@ print_usage_examples() {
 run_build_flow() {
   local selection="$1"
 
-  verify_build_prerequisites
+  verify_build_prerequisites "$selection"
   SERVICE_UNITS=()
 
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
@@ -709,7 +718,7 @@ run_prebuilt_flow() {
   local selection="$1"
   local release_arch
 
-  verify_prebuilt_prerequisites
+  verify_prebuilt_prerequisites "$selection"
   release_arch="$(detect_linux_arch)"
   SERVICE_UNITS=()
 
