@@ -37,6 +37,9 @@ def _update(state, result, manifest, offset):
 
 
 MAX_TOKEN_PER_CHUNK = 50
+EOS_LOGIT_THRESHOLD = -1.5
+EOS_TAIL_STEPS = 8
+MAX_DECODE_STEPS_CAP = 420
 
 
 def _find_boundary_indices(tokens, boundary_tokens):
@@ -245,7 +248,20 @@ def _pocket_tts_worker(input_queue, output_queue, precision="int8"):
                 })
                 _update(state, r, fm, 2)
 
-                max_len = int(math.ceil(len(sentence.split()) / 3.0 * fr + 2.0 * fr))
+                token_count = int(ids.shape[1])
+                word_count = max(1, len(sentence.split()))
+
+                # Keep decode budget generous enough for final words and prosody,
+                # then cap to avoid runaway generation on malformed prompts.
+                max_len = int(math.ceil((token_count / 2.4) * fr + 2.5 * fr))
+                max_len = max(max_len, int(math.ceil((word_count / 2.2) * fr + 2.0 * fr)))
+                max_len = min(max_len, MAX_DECODE_STEPS_CAP)
+
+                # Ignore very early EOS and force a minimum decode length.
+                min_decode_steps = min(
+                    max_len,
+                    max(12, int(math.ceil(token_count * 1.1))),
+                )
                 curr = np.full((1, 1, ld), np.nan, dtype=np.float32)
                 empty_t = np.zeros((1, 0, cd), dtype=np.float32)
                 eos_step = None
@@ -256,9 +272,9 @@ def _pocket_tts_worker(input_queue, output_queue, precision="int8"):
                     cond, eos_logit = r[0], r[1]
                     _update(state, r, fm, 2)
 
-                    if eos_logit[0, 0] > -4.0 and eos_step is None:
+                    if eos_logit[0, 0] > EOS_LOGIT_THRESHOLD and eos_step is None and step >= (min_decode_steps // 2):
                         eos_step = step
-                    if eos_step is not None and step >= eos_step + 3:
+                    if eos_step is not None and step >= max(eos_step + EOS_TAIL_STEPS, min_decode_steps):
                         break
 
                     x = np.random.normal(0.0, math.sqrt(0.7), (1, ld)).astype(np.float32)

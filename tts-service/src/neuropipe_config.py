@@ -34,11 +34,26 @@ DEFAULT_CONFIG = {
     "assistant": {
         "default_model": "llama3.2:1b",
         "history_idle_timeout_sec": 3600,
-        "instructions": {
-            "system_prompt": "You are a helpful AI voice assistant.\nKeep answers short and conversational.\n/set nothink",
-            "tool_usage_policy": "When the user asks about something a tool can help with, call the appropriate tool automatically. Do not ask for permission.",
+        "memory": {
+            "enabled_local": True,
+            "enabled_cloud": False,
+            "summarize_on_idle": True,
+            "summarize_on_stop": True,
+            "max_summary_chars": 1200,
+            "retrieve_top_k": 4,
+            "qdrant_path": "~/.local/share/neuropipe/memory/qdrant",
+            "collection": "assistant_memory",
+            "embedding_model": "all-minilm",
         },
-        "tools": {},
+        "instructions": {
+            "system_prompt": "You are a helpful AI voice assistant.\nKeep answers short and conversational.\nThis is a voice-to-voice conversation: assume the user replies by speaking, not typing.\nIf you need confirmation (for example before using a tool in ask mode), request a spoken yes/no response and never ask the user to type.\n/set nothink",
+            "tool_usage_policy": "When the user asks about something a tool can help with, call the appropriate tool automatically. If a tool is in ask mode, request spoken permission (yes/no) and continue based on the user's voice response. Do not ask the user to type permission commands.",
+        },
+        "tools": {
+            "open_url": "ask",
+            "screenshot": "ask",
+            "web_search": "ask",
+        },
     },
 }
 
@@ -90,6 +105,28 @@ def _validate_assistant(assistant: dict):
     timeout = assistant.get("history_idle_timeout_sec")
     if not isinstance(timeout, int) or timeout < 1:
         raise ValueError(f"Invalid assistant.history_idle_timeout_sec: {timeout}")
+
+    memory = assistant.get("memory", {})
+    if not isinstance(memory, dict):
+        raise ValueError("assistant.memory must be a table")
+
+    for key in ("enabled_local", "enabled_cloud", "summarize_on_idle", "summarize_on_stop"):
+        value = memory.get(key)
+        if not isinstance(value, bool):
+            raise ValueError(f"Invalid assistant.memory.{key}: {value}")
+
+    max_summary = memory.get("max_summary_chars")
+    if not isinstance(max_summary, int) or max_summary < 200:
+        raise ValueError(f"Invalid assistant.memory.max_summary_chars: {max_summary}")
+
+    top_k = memory.get("retrieve_top_k")
+    if not isinstance(top_k, int) or top_k < 1 or top_k > 20:
+        raise ValueError(f"Invalid assistant.memory.retrieve_top_k: {top_k}")
+
+    for key in ("qdrant_path", "collection", "embedding_model"):
+        value = memory.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Invalid assistant.memory.{key}: {value}")
 
     tools = assistant.get("tools", {})
     if not isinstance(tools, dict):

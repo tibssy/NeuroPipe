@@ -16,6 +16,7 @@ RELEASE_API_URL="https://api.github.com/repos/tibssy/NeuroPipe/releases/latest"
 
 declare -a SERVICE_UNITS=()
 PKG_MANAGER=""
+ASSISTANT_DEFAULT_MODEL_OVERRIDE=""
 
 clear_screen() {
   if command -v clear >/dev/null 2>&1; then
@@ -73,35 +74,35 @@ print_dependency_install_hint() {
   case "$PKG_MANAGER" in
     pacman)
       if [[ "$profile" == "runtime" ]]; then
-        printf "  sudo pacman -S --needed wtype wl-clipboard pipewire\n"
+        printf "  sudo pacman -S --needed systemd\n"
       else
         printf "  sudo pacman -S --needed base-devel python patchelf ccache\n"
       fi
       ;;
     apt)
       if [[ "$profile" == "runtime" ]]; then
-        printf "  sudo apt-get install -y wtype wl-clipboard pipewire\n"
+        printf "  sudo apt-get install -y systemd\n"
       else
         printf "  sudo apt-get install -y build-essential python3 patchelf ccache\n"
       fi
       ;;
     dnf)
       if [[ "$profile" == "runtime" ]]; then
-        printf "  sudo dnf install -y wtype wl-clipboard pipewire\n"
+        printf "  sudo dnf install -y systemd\n"
       else
         printf "  sudo dnf install -y gcc gcc-c++ make python3 patchelf ccache\n"
       fi
       ;;
     zypper)
       if [[ "$profile" == "runtime" ]]; then
-        printf "  sudo zypper install -y wtype wl-clipboard pipewire\n"
+        printf "  sudo zypper install -y systemd\n"
       else
         printf "  sudo zypper install -y gcc gcc-c++ make python3 patchelf ccache\n"
       fi
       ;;
     apk)
       if [[ "$profile" == "runtime" ]]; then
-        printf "  sudo apk add wtype wl-clipboard pipewire\n"
+        printf "  sudo apk add systemd\n"
       else
         printf "  sudo apk add build-base python3 patchelf ccache\n"
       fi
@@ -110,25 +111,41 @@ print_dependency_install_hint() {
       printf "  Install required packages manually for your distro.\n"
       ;;
   esac
+
+  if [[ "$profile" == "build" ]]; then
+    printf "  # Rust toolchain (cargo)\n"
+    printf "  curl https://sh.rustup.rs -sSf | sh\n"
+  fi
+}
+
+selection_has_assistant() {
+  local selection="$1"
+  [[ "$selection" == "3" || "$selection" == "4" ]]
 }
 
 check_runtime_dependencies() {
+  local selection="$1"
   local -a missing=()
 
   command -v systemctl >/dev/null 2>&1 || missing+=("systemctl")
-  command -v wtype >/dev/null 2>&1 || missing+=("wtype")
-  command -v wl-copy >/dev/null 2>&1 || missing+=("wl-copy (wl-clipboard)")
-  command -v pw-cli >/dev/null 2>&1 || missing+=("pw-cli (pipewire)")
+
+  if selection_has_assistant "$selection"; then
+    command -v ollama >/dev/null 2>&1 || missing+=("ollama")
+  fi
 
   if [[ ${#missing[@]} -gt 0 ]]; then
-    printf "\e[31mError: Missing runtime dependencies:\e[0m\n"
+    printf "\e[31mError: Missing required dependencies:\e[0m\n"
     printf "  - %s\n" "${missing[@]}"
     print_dependency_install_hint "runtime"
+    if selection_has_assistant "$selection"; then
+      printf "  Install Ollama: https://ollama.com/download\n"
+    fi
     return 1
   fi
 }
 
 check_build_dependencies() {
+  local selection="$1"
   local -a missing=()
 
   command -v uv >/dev/null 2>&1 || missing+=("uv")
@@ -136,25 +153,32 @@ check_build_dependencies() {
   command -v gcc >/dev/null 2>&1 || missing+=("gcc")
   command -v g++ >/dev/null 2>&1 || missing+=("g++")
   command -v make >/dev/null 2>&1 || missing+=("make")
+  command -v cargo >/dev/null 2>&1 || missing+=("cargo")
   command -v patchelf >/dev/null 2>&1 || missing+=("patchelf")
   command -v ccache >/dev/null 2>&1 || missing+=("ccache")
 
   if [[ ${#missing[@]} -gt 0 ]]; then
-    printf "\e[31mError: Missing build dependencies:\e[0m\n"
+    printf "\e[31mError: Missing required build dependencies:\e[0m\n"
     printf "  - %s\n" "${missing[@]}"
     print_dependency_install_hint "build"
     return 1
   fi
+
+  if selection_has_assistant "$selection"; then
+    require_command ollama
+  fi
 }
 
 verify_build_prerequisites() {
-  check_runtime_dependencies
-  check_build_dependencies
+  local selection="$1"
+  check_runtime_dependencies "$selection"
+  check_build_dependencies "$selection"
 }
 
 verify_prebuilt_prerequisites() {
+  local selection="$1"
   require_command curl
-  check_runtime_dependencies
+  check_runtime_dependencies "$selection"
 }
 
 prepare_install_dirs() {
@@ -248,6 +272,41 @@ install_cli_binary() {
   printf "\e[32mInstalled binary: %s/neuro-ipc\e[0m\n" "$LOCAL_BIN_DIR"
 }
 
+build_cli_binary() {
+  local target_binary="$CLI_DIR/target/release/neuro-ipc"
+
+  if ! command -v cargo &>/dev/null; then
+    printf "\e[31mError: cargo is required to build neuro-ipc from source.\e[0m\n"
+    printf "\e[33mInstall Rust via https://rustup.rs and run installer again.\e[0m\n"
+    return 1
+  fi
+
+  printf "\n\e[34mBuilding neuro-ipc from source...\e[0m\n"
+  (cd "$CLI_DIR" && cargo build --release) || {
+    printf "\e[31mRust build failed. Install Rust via https://rustup.rs\e[0m\n"
+    return 1
+  }
+
+  if [[ ! -f "$target_binary" ]]; then
+    printf "\e[31mError: Built CLI binary not found at %s\e[0m\n" "$target_binary"
+    return 1
+  fi
+
+  printf "\e[32mBuild verification passed: %s\e[0m\n" "$target_binary"
+}
+
+install_cli_binary_from_source() {
+  local target_binary="$CLI_DIR/target/release/neuro-ipc"
+
+  if [[ ! -f "$target_binary" ]]; then
+    printf "\e[31mError: Cannot install, missing CLI binary at %s\e[0m\n" "$target_binary"
+    return 1
+  fi
+
+  install -Dm755 "$target_binary" "$LOCAL_BIN_DIR/neuro-ipc"
+  printf "\e[32mInstalled binary: %s/neuro-ipc\e[0m\n" "$LOCAL_BIN_DIR"
+}
+
 install_default_config() {
   local config_template="$ROOT_DIR/config.example.toml"
 
@@ -264,7 +323,70 @@ install_default_config() {
   fi
 
   install -Dm644 "$config_template" "$NEUROPIPE_CONFIG_FILE"
+
+  if [[ -n "$ASSISTANT_DEFAULT_MODEL_OVERRIDE" ]]; then
+    local tmp_file
+    tmp_file="$(mktemp)"
+    local replaced=false
+    local line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$replaced" == false && "$line" =~ ^default_model[[:space:]]*= ]]; then
+        printf 'default_model = "%s"\n' "$ASSISTANT_DEFAULT_MODEL_OVERRIDE" >> "$tmp_file"
+        replaced=true
+      else
+        printf '%s\n' "$line" >> "$tmp_file"
+      fi
+    done < "$NEUROPIPE_CONFIG_FILE"
+    mv "$tmp_file" "$NEUROPIPE_CONFIG_FILE"
+  fi
+
   printf "\e[32mInstalled default config: %s\e[0m\n" "$NEUROPIPE_CONFIG_FILE"
+}
+
+select_assistant_default_model() {
+  local default_model="llama3.2:1b"
+
+  ASSISTANT_DEFAULT_MODEL_OVERRIDE=""
+
+  local ollama_output
+  if ! ollama_output="$(ollama list 2>/dev/null)"; then
+    printf "\e[31mError: failed to run 'ollama list'. Make sure Ollama is installed and running.\e[0m\n"
+    return 1
+  fi
+
+  local -a models=()
+  local line
+  local name
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    [[ "$line" =~ ^NAME[[:space:]]+ID[[:space:]]+SIZE[[:space:]]+MODIFIED ]] && continue
+    name="${line%%[[:space:]]*}"
+    [[ -z "$name" ]] && continue
+    models+=("$name")
+  done <<< "$ollama_output"
+
+  if [[ ${#models[@]} -eq 0 ]]; then
+    printf "\e[31mError: no Ollama models found. Pull one first (for example: ollama pull %s).\e[0m\n" "$default_model"
+    return 1
+  fi
+
+  printf "\n\e[36mSelect default assistant model (from ollama list):\e[0m\n"
+  local i
+  for i in "${!models[@]}"; do
+    printf "  %d) %s\n" "$((i + 1))" "${models[$i]}"
+  done
+
+  local choice
+  while true; do
+    printf "\e[36mEnter model number [1-%d]: \e[0m" "${#models[@]}"
+    read -r choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#models[@]} )); then
+      ASSISTANT_DEFAULT_MODEL_OVERRIDE="${models[$((choice - 1))]}"
+      printf "\e[32mSelected default assistant model: %s\e[0m\n" "$ASSISTANT_DEFAULT_MODEL_OVERRIDE"
+      return 0
+    fi
+    printf "\e[31mInvalid selection. Please enter a number between 1 and %d.\e[0m\n" "${#models[@]}"
+  done
 }
 
 install_tool_plugins() {
@@ -299,6 +421,16 @@ install_tool_plugins() {
     fi
   done
   printf "\e[0m\n"
+}
+
+pull_assistant_embedding_model() {
+  local model_name="all-minilm"
+
+  require_command ollama
+
+  printf "\n\e[34mPulling Ollama embedding model (%s)...\e[0m\n" "$model_name"
+  ollama pull "$model_name"
+  printf "\e[32mPulled Ollama model: %s\e[0m\n" "$model_name"
 }
 
 handle_pocket_tts_voices() {
@@ -513,8 +645,12 @@ print_usage_examples() {
 run_build_flow() {
   local selection="$1"
 
-  verify_build_prerequisites
+  verify_build_prerequisites "$selection"
   SERVICE_UNITS=()
+
+  if [[ "$selection" == "3" || "$selection" == "4" ]]; then
+    select_assistant_default_model
+  fi
 
   case "$selection" in
     1)
@@ -537,6 +673,8 @@ run_build_flow() {
       ;;
   esac
 
+  build_cli_binary
+
   prompt_install_approval "Build artifacts"
   prepare_install_dirs
 
@@ -556,12 +694,14 @@ run_build_flow() {
       install_component_files "$ASSISTANT_DIR" "neuro-assistant-service" "neuropipe-assistant.service"
       ;;
   esac
-  install_cli_binary
-  install_default_config
+  install_cli_binary_from_source
 
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
     install_tool_plugins
+    pull_assistant_embedding_model
   fi
+
+  install_default_config
 
   enable_and_start_services
 
@@ -578,9 +718,13 @@ run_prebuilt_flow() {
   local selection="$1"
   local release_arch
 
-  verify_prebuilt_prerequisites
+  verify_prebuilt_prerequisites "$selection"
   release_arch="$(detect_linux_arch)"
   SERVICE_UNITS=()
+
+  if [[ "$selection" == "3" || "$selection" == "4" ]]; then
+    select_assistant_default_model
+  fi
 
   case "$selection" in
     1)
@@ -627,11 +771,13 @@ run_prebuilt_flow() {
       ;;
   esac
   install_cli_binary
-  install_default_config
 
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
     install_tool_plugins
+    pull_assistant_embedding_model
   fi
+
+  install_default_config
 
   enable_and_start_services
 

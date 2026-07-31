@@ -14,6 +14,30 @@
 
 ## Installation
 
+### Dependencies
+
+Runtime dependencies checked by the installer:
+
+- `systemctl`
+- `wtype`
+- `wl-copy` (from `wl-clipboard`)
+- `pw-cli` (from `pipewire`)
+
+Build dependencies checked for source installs:
+
+- `uv`
+- `python3`
+- `gcc`
+- `g++`
+- `make`
+- `cargo` (Rust toolchain, for `neuro-ipc`)
+- `patchelf`
+- `ccache`
+
+Assistant dependency:
+
+- [Ollama](https://ollama.com) installed and running, with your target model pulled
+
 ### 1. Clone the repository
 ```bash
 git clone https://github.com/tibssy/NeuroPipe.git

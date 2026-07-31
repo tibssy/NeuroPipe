@@ -44,19 +44,37 @@ history_idle_timeout_sec = 3600
 [assistant.favorites]
 models = []
 
+[assistant.memory]
+enabled_local = true
+enabled_cloud = false
+summarize_on_idle = true
+summarize_on_stop = true
+max_summary_chars = 1200
+retrieve_top_k = 4
+qdrant_path = "~/.local/share/neuropipe/memory/qdrant"
+collection = "assistant_memory"
+embedding_model = "all-minilm"
+
 [assistant.instructions]
 system_prompt = """
 You are a helpful AI voice assistant.
 Keep answers short and conversational.
+This is a voice-to-voice conversation: assume the user replies by speaking, not typing.
+If you need confirmation (for example before using a tool in ask mode), request a spoken yes/no response and never ask the user to type.
 /set nothink
 """
 tool_usage_policy = """
 When the user asks about something a tool can help with,
 call the appropriate tool automatically.
-Do not ask for permission.
+If a tool is in ask mode, request spoken permission (yes/no)
+and continue based on the user's voice response.
+Do not ask the user to type permission commands.
 """
 
 [assistant.tools]
+open_url = "ask"
+screenshot = "ask"
+web_search = "ask"
 "#;
 
 fn config_path() -> Result<PathBuf, String> {
@@ -145,6 +163,13 @@ fn require_int(table: &TomlMap<String, TomlValue>, key: &str, path: &str) -> Res
         .get(key)
         .and_then(|v| v.as_integer())
         .ok_or_else(|| format!("{path}.{key} must be an integer"))
+}
+
+fn require_bool(table: &TomlMap<String, TomlValue>, key: &str, path: &str) -> Result<bool, String> {
+    table
+        .get(key)
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| format!("{path}.{key} must be a boolean"))
 }
 
 fn require_float(table: &TomlMap<String, TomlValue>, key: &str, path: &str) -> Result<f64, String> {
@@ -272,6 +297,28 @@ pub fn validate_document(cfg: &TomlValue) -> Result<(), String> {
     let history_idle = require_int(assistant, "history_idle_timeout_sec", "root.assistant")?;
     if history_idle < 1 {
         return Err("root.assistant.history_idle_timeout_sec must be >= 1".to_string());
+    }
+
+    let memory = assistant
+        .get("memory")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "root.assistant.memory must be a table".to_string())?;
+    for key in ["enabled_local", "enabled_cloud", "summarize_on_idle", "summarize_on_stop"] {
+        let _ = require_bool(memory, key, "root.assistant.memory")?;
+    }
+    let max_summary = require_int(memory, "max_summary_chars", "root.assistant.memory")?;
+    if max_summary < 200 {
+        return Err("root.assistant.memory.max_summary_chars must be >= 200".to_string());
+    }
+    let top_k = require_int(memory, "retrieve_top_k", "root.assistant.memory")?;
+    if !(1..=20).contains(&top_k) {
+        return Err("root.assistant.memory.retrieve_top_k must be in [1, 20]".to_string());
+    }
+    for key in ["qdrant_path", "collection", "embedding_model"] {
+        let value = require_string(memory, key, "root.assistant.memory")?;
+        if value.trim().is_empty() {
+            return Err(format!("root.assistant.memory.{key} must be non-empty"));
+        }
     }
 
     let instructions = assistant

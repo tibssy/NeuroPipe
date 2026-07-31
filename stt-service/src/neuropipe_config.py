@@ -22,6 +22,30 @@ DEFAULT_CONFIG = {
         "digital_gain": 3.0,
         "model_idle_timeout_sec": 60,
     },
+    "assistant": {
+        "default_model": "llama3.2:1b",
+        "history_idle_timeout_sec": 3600,
+        "memory": {
+            "enabled_local": True,
+            "enabled_cloud": False,
+            "summarize_on_idle": True,
+            "summarize_on_stop": True,
+            "max_summary_chars": 1200,
+            "retrieve_top_k": 4,
+            "qdrant_path": "~/.local/share/neuropipe/memory/qdrant",
+            "collection": "assistant_memory",
+            "embedding_model": "all-minilm",
+        },
+        "instructions": {
+            "system_prompt": "You are a helpful AI voice assistant.\nKeep answers short and conversational.\nThis is a voice-to-voice conversation: assume the user replies by speaking, not typing.\nIf you need confirmation (for example before using a tool in ask mode), request a spoken yes/no response and never ask the user to type.\n/set nothink",
+            "tool_usage_policy": "When the user asks about something a tool can help with, call the appropriate tool automatically. If a tool is in ask mode, request spoken permission (yes/no) and continue based on the user's voice response. Do not ask the user to type permission commands.",
+        },
+        "tools": {
+            "open_url": "ask",
+            "screenshot": "ask",
+            "web_search": "ask",
+        },
+    },
 }
 
 
