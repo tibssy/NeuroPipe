@@ -10,7 +10,7 @@
 *   **Zero Latency:** Uses Unix Domain Sockets (IPC) for instant communication.
 *   **Local Only:** No data leaves your machine. Powered by ONNX Runtime.
 *   **Modular:** The STT service runs as a system daemon. Clients connect only when needed.
-*   **Wayland Ready:** Optimized for integration with Hyprland and Sway.
+*   **Wayland Ready:** Tested on Niri, GNOME, KDE Plasma, and Hyprland with UWSM.
 
 ## Installation
 
@@ -73,6 +73,30 @@ The installer will:
 - enable and start selected services
 
 It also checks required dependencies and prints package-manager-specific install hints if something is missing.
+
+### GUI tool startup notes
+
+Some assistant tools (`screenshot`, `open_url`) require a fully initialized graphical session environment
+(`WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`).
+
+Known-good setups:
+
+- Niri
+- GNOME
+- KDE Plasma
+- Hyprland with UWSM
+
+For plain Hyprland and MangoWC, you may need compositor-specific startup wiring to import your session
+environment into the systemd user manager before NeuroPipe services start.
+
+Recommended pattern:
+
+```bash
+dbus-update-activation-environment --systemd --all
+```
+
+If GUI-dependent tools fail after boot but work after restarting `neuropipe-assistant.service`, this is usually
+an environment propagation issue in compositor startup ordering.
 
 ## Service checks
 
