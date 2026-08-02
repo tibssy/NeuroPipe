@@ -17,6 +17,7 @@ uv run python -m nuitka --onefile \
   --output-filename=neuro-tts-service \
   --assume-yes-for-downloads \
   --lto=yes \
+  --no-deployment-flag=self-execution \
   --python-flag=no_site \
   src/tts_service.py
 
