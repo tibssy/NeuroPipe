@@ -464,15 +464,20 @@ impl Shared {
 impl Shared {
     fn stream_and_speak(
         &self,
-        tools: &[Value],
+        tools: Option<&[Value]>,
         memory_context: Option<&str>,
     ) -> Option<(Vec<crate::ollama::ToolCall>, String)> {
         let mut request_messages = self.history_json();
         if let Some(ctx) = memory_context {
-            request_messages.insert(1, json!({"role": "system", "content": ctx}));
+            let memory_msg = json!({"role": "system", "content": ctx});
+            if request_messages.first().and_then(|m| m.get("role")).and_then(|r| r.as_str()) == Some("system") {
+                request_messages.insert(1, memory_msg);
+            } else {
+                request_messages.insert(0, memory_msg);
+            }
         }
         let model_name = self.model.lock().unwrap().clone();
-        let mut stream = match self.ollama.chat_stream(&model_name, &request_messages, Some(tools)) {
+        let mut stream = match self.ollama.chat_stream(&model_name, &request_messages, tools) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("[Ollama Error: {e}]");
@@ -568,7 +573,7 @@ impl Shared {
             tool_name: None,
         });
         *self.last_activity.lock().unwrap() = Instant::now();
-        Some((Vec::new(), full))
+        None
     }
 
     fn ask_ollama(&self, text: &str) {
@@ -591,8 +596,9 @@ impl Shared {
         };
 
         for round_num in 0..MAX_TOOL_ROUNDS {
+            let round_tools = if round_num == 0 { tools.as_deref() } else { None };
             let result = self.stream_and_speak(
-                tools.as_deref().unwrap_or(&[]),
+                round_tools,
                 if round_num == 0 { memory_context.as_deref() } else { None },
             );
             let (called, spoken) = match result {
@@ -641,7 +647,7 @@ impl Shared {
                 .to_string(),
             tool_name: None,
         });
-        if let Some((_, final_spoken)) = self.stream_and_speak(&[], None) {
+        if let Some((_, final_spoken)) = self.stream_and_speak(None, None) {
             if !final_spoken.trim().is_empty() {
                 self.history.lock().unwrap().push(HistoryEntry {
                     role: "assistant".to_string(),
