@@ -10,7 +10,7 @@ NEUROPIPE_CONFIG_FILE="$NEUROPIPE_CONFIG_DIR/config.toml"
 
 TTS_DIR="$ROOT_DIR/tts-service"
 STT_DIR="$ROOT_DIR/stt-service"
-ASSISTANT_DIR="$ROOT_DIR/assistant-service"
+ASSISTANT_DIR="$ROOT_DIR/assistant-service-rs"
 CLI_DIR="$ROOT_DIR/cli"
 RELEASE_API_URL="https://api.github.com/repos/tibssy/NeuroPipe/releases/latest"
 

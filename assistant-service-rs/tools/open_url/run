@@ -1,0 +1,20 @@
+#!/bin/bash
+set -e
+
+PARAMS="$1"
+URL=$(echo "$PARAMS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('url',''))" 2>/dev/null)
+
+if [[ -z "$URL" ]]; then
+  echo '{"success": false, "error": "No URL provided"}'
+  exit 0
+fi
+
+if command -v xdg-open &>/dev/null; then
+  xdg-open "$URL" 2>/dev/null
+  echo "{\"success\": true, \"result\": \"Opened $URL in the default browser\"}"
+elif command -v xdg-www-browser &>/dev/null; then
+  xdg-www-browser "$URL" 2>/dev/null
+  echo "{\"success\": true, \"result\": \"Opened $URL in the default browser\"}"
+else
+  echo "{\"success\": false, \"error\": \"No browser opener found (xdg-open not available)\"}"
+fi

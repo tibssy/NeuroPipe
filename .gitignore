@@ -37,3 +37,6 @@ Assets.zip
 
 # --- Rust Build Artifacts ---
 cli/target/
+assistant-service-rs/target/
+cli/dist/
+assistant-service-rs/dist/
