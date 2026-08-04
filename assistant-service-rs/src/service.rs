@@ -3,7 +3,7 @@ use std::{
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -30,6 +30,74 @@ pub struct HistoryEntry {
     pub tool_name: Option<String>,
 }
 
+struct TtsEventData {
+    started_sentences: Vec<String>,
+    completed_sentences: usize,
+    interrupted: bool,
+}
+
+pub struct TtsEvents {
+    data: Mutex<TtsEventData>,
+    changed: Condvar,
+}
+
+impl TtsEvents {
+    fn new() -> Self {
+        Self {
+            data: Mutex::new(TtsEventData {
+                started_sentences: Vec::new(),
+                completed_sentences: 0,
+                interrupted: false,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn begin_response(&self) {
+        let mut data = self.data.lock().unwrap();
+        data.started_sentences.clear();
+        data.completed_sentences = 0;
+        data.interrupted = false;
+    }
+
+    fn record(&self, message: &Value) {
+        let event = message.get("event").and_then(Value::as_str).unwrap_or("");
+        let mut data = self.data.lock().unwrap();
+        match event {
+            "speaking" => {
+                if let Some(sentence) = message.get("sentence").and_then(Value::as_str) {
+                    data.started_sentences.push(sentence.to_string());
+                }
+            }
+            "sentence_done" => data.completed_sentences += 1,
+            "interrupted" => {
+                data.completed_sentences += 1;
+                data.interrupted = true;
+            }
+            _ => return,
+        }
+        self.changed.notify_all();
+    }
+
+    fn started_sentences(&self) -> Vec<String> {
+        self.data.lock().unwrap().started_sentences.clone()
+    }
+
+    fn wait_for_completion(&self, expected: usize, cancel: &AtomicBool, mode: &Mutex<String>) {
+        let mut data = self.data.lock().unwrap();
+        while data.completed_sentences < expected
+            && !cancel.load(Ordering::SeqCst)
+            && *mode.lock().unwrap() == "MODE1"
+        {
+            let (next, _) = self
+                .changed
+                .wait_timeout(data, Duration::from_millis(100))
+                .unwrap();
+            data = next;
+        }
+    }
+}
+
 /// All mutable state, behind interior locks so it can be shared across threads
 /// as `Arc<Shared>`.
 pub struct Shared {
@@ -46,6 +114,7 @@ pub struct Shared {
     pub tools: Mutex<ToolManager>,
     memory: MemoryStore,
     pub ollama: OllamaClient,
+    pub tts_events: Arc<TtsEvents>,
 }
 
 pub fn notify(title: &str, body: &str) {
@@ -70,6 +139,7 @@ impl Shared {
             }),
             memory,
             ollama: OllamaClient::new(),
+            tts_events: Arc::new(TtsEvents::new()),
             cfg: Arc::new(cfg),
             mode: Mutex::new("IDLE".to_string()),
             cancel: AtomicBool::new(false),
@@ -176,22 +246,34 @@ pub fn tts_req(addr: &str, cmd: &Value) -> Value {
     Value::Null
 }
 
-/// Non-blocking JSON receive for a SUB socket. Returns None if no frame is
-/// ready (mirrors the Python `recv_json(flags=NOBLOCK)` behaviour).
-fn recv_json(sock: &zmq::Socket, flags: i32) -> Option<Value> {
-    let mut msg = zmq::Message::new();
-    match sock.recv(&mut msg, flags) {
-        Ok(()) => serde_json::from_slice(msg.as_ref()).ok(),
-        Err(_) => None,
-    }
-}
-
 fn tts_sub(addr: &str) -> Option<zmq::Socket> {
     let ctx = zmq::Context::new();
     let sock = ctx.socket(zmq::SUB).ok()?;
     sock.connect(addr).ok()?;
     sock.set_subscribe(b"").ok()?;
     Some(sock)
+}
+
+pub fn start_tts_event_listener(shared: &Arc<Shared>) {
+    let events = Arc::clone(&shared.tts_events);
+    let addr = shared.cfg.ipc.tts_events.clone();
+    thread::spawn(move || loop {
+        let Some(socket) = tts_sub(&addr) else {
+            thread::sleep(Duration::from_secs(1));
+            continue;
+        };
+        loop {
+            match socket.recv_bytes(0) {
+                Ok(bytes) => {
+                    if let Ok(message) = serde_json::from_slice::<Value>(&bytes) {
+                        events.record(&message);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        thread::sleep(Duration::from_secs(1));
+    });
 }
 
 fn is_cloud_model(model: &str) -> bool {
@@ -666,40 +748,15 @@ impl Shared {
         let mode = self.mode.lock().unwrap().clone();
         if mode == "MODE1" {
             self.set_stt_mode("IDLE");
-            if let Some(sub) = tts_sub(&self.cfg.ipc.tts_events) {
-                loop {
-                    match recv_json(&sub, zmq::DONTWAIT) {
-                        Some(_) => continue,
-                        None => break,
-                    }
-                }
-            }
+            self.tts_events.begin_response();
         }
 
         self.ask_ollama(&text);
 
         if mode == "MODE1" {
-            let mut remaining = *self.pending_sentences.lock().unwrap();
-            let sub = tts_sub(&self.cfg.ipc.tts_events);
-            while remaining > 0
-                && !self.cancel.load(Ordering::SeqCst)
-                && *self.mode.lock().unwrap() == "MODE1"
-            {
-                if let Some(sock) = &sub {
-                    match recv_json(&sock, zmq::DONTWAIT) {
-                        Some(msg) => {
-                            let event = msg.get("event").and_then(|v| v.as_str()).unwrap_or("");
-                            if event == "sentence_done" || event == "interrupted" {
-                                remaining -= 1;
-                                *self.pending_sentences.lock().unwrap() = remaining;
-                            }
-                        }
-                        None => thread::sleep(Duration::from_millis(50)),
-                    }
-                } else {
-                    break;
-                }
-            }
+            let remaining = *self.pending_sentences.lock().unwrap();
+            self.tts_events
+                .wait_for_completion(remaining, &self.cancel, &self.mode);
             if *self.mode.lock().unwrap() == "MODE1" {
                 self.set_stt_mode("VAD");
             }
@@ -734,9 +791,15 @@ impl Shared {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let spoken = self.spoken_buffer.lock().unwrap().clone();
+        let started = self.tts_events.started_sentences();
+        let spoken = if started.is_empty() {
+            self.spoken_buffer.lock().unwrap().clone()
+        } else {
+            started
+        };
         self.truncate_history(&spoken, &last_sentence);
-        self.cancel.store(false, Ordering::SeqCst);
+        *self.pending_sentences.lock().unwrap() = 0;
+        self.tts_events.changed.notify_all();
         if *self.mode.lock().unwrap() == "MODE1" {
             self.set_stt_mode("VAD");
         }
@@ -801,4 +864,3 @@ impl Shared {
         notify("NeuroPipe", "Listening");
     }
 }
-

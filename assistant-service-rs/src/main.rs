@@ -24,6 +24,7 @@ fn main() {
     println!("Model: {}", shared.model.lock().unwrap().clone());
     println!("Socket: {}", cfg.ipc.assistant_cmd);
 
+    service::start_tts_event_listener(&shared);
     let c = Arc::clone(&shared);
     thread::spawn(move || cmd_loop(&c));
     let s = Arc::clone(&shared);
@@ -73,6 +74,9 @@ fn handle_cmd(shared: &Arc<Shared>, cmd: &Value) -> Value {
     let command = cmd.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
     match command.as_str() {
         "mode1" | "mode2" => {
+            if shared.is_busy() {
+                shared.interrupt();
+            }
             let mode = if command == "mode1" { "MODE1" } else { "MODE2" };
             shared.start_session(
                 mode,
