@@ -1,0 +1,16 @@
+{
+  "name": "open_url",
+  "description": "Open a URL in the default web browser. Use when the user asks to open a link, visit a website, or look at a specific page.",
+  "version": 1,
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "The URL to open"
+      }
+    },
+    "required": ["url"]
+  },
+  "default_permission": "deny"
+}
