@@ -1,0 +1,14 @@
+[Unit]
+Description=NeuroPipe TTS Service (Native Rust)
+After=sound.target pipewire.service pulseaudio.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/bin
+ExecStart=%h/.local/bin/neuro-tts-service --service
+Restart=always
+RestartSec=3
+Nice=-10
+
+[Install]
+WantedBy=default.target
