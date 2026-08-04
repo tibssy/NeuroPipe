@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use rodio::{buffer::SamplesBuffer, OutputStreamBuilder, Sink};
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,42 +18,55 @@ struct AudioChunk {
     generation: u64,
 }
 
+struct GenerationRequest {
+    text: String,
+    voice: String,
+    speed: f32,
+    generation: u64,
+}
+
 pub struct TtsService {
     config: Config,
     engine: Arc<Mutex<Option<Box<dyn TtsEngine>>>>,
     engine_name: Option<String>,
     quality: Option<Quality>,
-    interrupt: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
     speaking: Arc<AtomicBool>,
     current_sentence: Arc<Mutex<String>>,
     generating: Arc<AtomicBool>,
+    pending_generation: Arc<AtomicUsize>,
     last_activity: Arc<Mutex<Instant>>,
     audio_tx: mpsc::Sender<AudioChunk>,
     audio_rx: Option<mpsc::Receiver<AudioChunk>>,
+    generation_tx: mpsc::Sender<GenerationRequest>,
+    generation_rx: Option<mpsc::Receiver<GenerationRequest>>,
 }
 
 impl TtsService {
     pub fn new(config: Config) -> Self {
         let (audio_tx, audio_rx) = mpsc::channel();
+        let (generation_tx, generation_rx) = mpsc::channel();
         Self {
             config,
             engine: Arc::new(Mutex::new(None)),
             engine_name: None,
             quality: None,
-            interrupt: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
             speaking: Arc::new(AtomicBool::new(false)),
             current_sentence: Arc::new(Mutex::new(String::new())),
             generating: Arc::new(AtomicBool::new(false)),
+            pending_generation: Arc::new(AtomicUsize::new(0)),
             last_activity: Arc::new(Mutex::new(Instant::now())),
             audio_tx,
             audio_rx: Some(audio_rx),
+            generation_tx,
+            generation_rx: Some(generation_rx),
         }
     }
 
     pub fn run(mut self) -> Result<()> {
         let receiver = self.audio_rx.take().expect("audio receiver");
+        let generation_receiver = self.generation_rx.take().expect("generation receiver");
         let events_addr = self.config.ipc.tts_events.clone();
         let generation = Arc::clone(&self.generation);
         let speaking = Arc::clone(&self.speaking);
@@ -67,6 +80,22 @@ impl TtsService {
                 speaking,
                 current_sentence,
                 last_activity,
+            )
+        });
+
+        let engine = Arc::clone(&self.engine);
+        let audio_tx = self.audio_tx.clone();
+        let generation = Arc::clone(&self.generation);
+        let generating = Arc::clone(&self.generating);
+        let pending_generation = Arc::clone(&self.pending_generation);
+        thread::spawn(move || {
+            generation_loop(
+                generation_receiver,
+                engine,
+                audio_tx,
+                generation,
+                generating,
+                pending_generation,
             )
         });
 
@@ -131,7 +160,6 @@ impl TtsService {
         match message.get("command").and_then(Value::as_str) {
             Some("speak") => self.speak(&message),
             Some("stop") => {
-                self.interrupt.store(true, Ordering::SeqCst);
                 self.generation.fetch_add(1, Ordering::SeqCst);
                 let last_sentence = self
                     .current_sentence
@@ -203,47 +231,23 @@ impl TtsService {
         if let Err(error) = self.validate_voice(&engine, &voice) {
             return json!({"status": "error", "message": error.to_string()});
         }
-        let request_generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let request_generation = self.generation.load(Ordering::SeqCst);
+        self.pending_generation.fetch_add(1, Ordering::SeqCst);
         self.generating.store(true, Ordering::SeqCst);
-        self.interrupt.store(true, Ordering::SeqCst);
-        let interrupt = Arc::clone(&self.interrupt);
-        let generation = Arc::clone(&self.generation);
-        let generating = Arc::clone(&self.generating);
-        let engine = Arc::clone(&self.engine);
-        let audio_tx = self.audio_tx.clone();
-        thread::spawn(move || {
-            interrupt.store(false, Ordering::SeqCst);
-            if let Ok(mut guard) = engine.lock() {
-                if let Some(engine) = guard.as_mut() {
-                    for sentence in split_sentences(&text) {
-                        match engine.synthesize(&sentence, &voice, speed) {
-                            Ok((samples, sample_rate))
-                                if !interrupt.load(Ordering::SeqCst)
-                                    && generation.load(Ordering::SeqCst) == request_generation =>
-                            {
-                                eprintln!(
-                                    "[TTS] generated {} samples for '{}'; queueing",
-                                    samples.len(),
-                                    sentence
-                                );
-                                let _ = audio_tx.send(AudioChunk {
-                                    samples,
-                                    sample_rate,
-                                    sentence,
-                                    generation: request_generation,
-                                });
-                            }
-                            Ok(_) => break,
-                            Err(error) => {
-                                eprintln!("[TTS] generation error: {error:#}");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            generating.store(false, Ordering::SeqCst);
-        });
+        if self
+            .generation_tx
+            .send(GenerationRequest {
+                text,
+                voice,
+                speed,
+                generation: request_generation,
+            })
+            .is_err()
+        {
+            self.pending_generation.fetch_sub(1, Ordering::SeqCst);
+            self.generating.store(false, Ordering::SeqCst);
+            return json!({"status": "error", "message": "TTS generation worker stopped"});
+        }
         json!({"status": "queued"})
     }
 
@@ -267,6 +271,9 @@ impl TtsService {
     }
 
     fn ensure_engine_quality(&mut self, engine_name: &str, quality: Quality) -> Result<()> {
+        if self.engine_name.as_deref() == Some(engine_name) && self.quality == Some(quality) {
+            return Ok(());
+        }
         let mut guard = self
             .engine
             .lock()
@@ -309,13 +316,6 @@ impl TtsService {
     }
 
     fn available_voices(&mut self, engine_name: &str) -> Result<Vec<String>> {
-        if self.engine_name.as_deref() == Some(engine_name) {
-            if let Ok(mut guard) = self.engine.lock() {
-                if let Some(engine) = guard.as_mut() {
-                    return engine.voices();
-                }
-            }
-        }
         let mut engine: Box<dyn TtsEngine> = match engine_name {
             "kokoro" => Box::new(KokoroEngine::new(model_path(engine_name), Quality::High)),
             "pocket-tts" => Box::new(PocketTtsEngine::new(model_path(engine_name), Quality::High)),
@@ -420,6 +420,51 @@ fn trim_process_heap() {
 
 #[cfg(not(target_os = "linux"))]
 fn trim_process_heap() {}
+
+fn generation_loop(
+    receiver: mpsc::Receiver<GenerationRequest>,
+    engine: Arc<Mutex<Option<Box<dyn TtsEngine>>>>,
+    audio_tx: mpsc::Sender<AudioChunk>,
+    generation: Arc<AtomicU64>,
+    generating: Arc<AtomicBool>,
+    pending_generation: Arc<AtomicUsize>,
+) {
+    for request in receiver {
+        if generation.load(Ordering::SeqCst) == request.generation {
+            if let Ok(mut guard) = engine.lock() {
+                if let Some(engine) = guard.as_mut() {
+                    for sentence in split_sentences(&request.text) {
+                        match engine.synthesize(&sentence, &request.voice, request.speed) {
+                            Ok((samples, sample_rate))
+                                if generation.load(Ordering::SeqCst) == request.generation =>
+                            {
+                                eprintln!(
+                                    "[TTS] generated {} samples for '{}'; queueing",
+                                    samples.len(),
+                                    sentence
+                                );
+                                let _ = audio_tx.send(AudioChunk {
+                                    samples,
+                                    sample_rate,
+                                    sentence,
+                                    generation: request.generation,
+                                });
+                            }
+                            Ok(_) => break,
+                            Err(error) => {
+                                eprintln!("[TTS] generation error: {error:#}");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if pending_generation.fetch_sub(1, Ordering::SeqCst) == 1 {
+            generating.store(false, Ordering::SeqCst);
+        }
+    }
+}
 
 fn playback_loop(
     receiver: mpsc::Receiver<AudioChunk>,
