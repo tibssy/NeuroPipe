@@ -69,8 +69,11 @@ impl TtsEngine for KokoroEngine {
     }
 
     fn voices(&mut self) -> Result<Vec<String>> {
-        self.load()?;
-        self.inner.as_mut().unwrap().voices()
+        if let Some(inner) = self.inner.as_mut() {
+            inner.voices()
+        } else {
+            Kokoro::list_voice_names(&self.model_dir)
+        }
     }
 
     fn synthesize(&mut self, text: &str, voice: &str, speed: f32) -> Result<(Vec<f32>, u32)> {
@@ -80,6 +83,17 @@ impl TtsEngine for KokoroEngine {
 }
 
 impl Kokoro {
+    pub fn list_voice_names(model_dir: impl AsRef<Path>) -> Result<Vec<String>> {
+        let voices_path = model_dir.as_ref().join("voices-v1.0.bin");
+        let mut voices = NpzReader::new(BufReader::new(File::open(voices_path)?))?
+            .names()?
+            .into_iter()
+            .map(|name| name.trim_end_matches(".npy").to_string())
+            .collect::<Vec<_>>();
+        voices.sort();
+        Ok(voices)
+    }
+
     pub fn load(model_dir: impl AsRef<Path>, quality: Quality) -> Result<Self> {
         let model_dir = model_dir.as_ref();
         let model_path = model_dir.join(quality.model_name());

@@ -110,8 +110,11 @@ impl TtsEngine for PocketTtsEngine {
     }
 
     fn voices(&mut self) -> Result<Vec<String>> {
-        self.load()?;
-        self.inner.as_ref().unwrap().voices()
+        if let Some(inner) = self.inner.as_ref() {
+            inner.voices()
+        } else {
+            PocketTts::list_voice_names(&self.model_dir)
+        }
     }
 
     fn synthesize(&mut self, text: &str, voice: &str, speed: f32) -> Result<(Vec<f32>, u32)> {
@@ -121,6 +124,19 @@ impl TtsEngine for PocketTtsEngine {
 }
 
 impl PocketTts {
+    fn list_voice_names(model_dir: &Path) -> Result<Vec<String>> {
+        let voices_dir = model_dir.join("voices");
+        let mut voices = fs::read_dir(voices_dir)?
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.path().file_name().map(|name| name.to_owned()))
+            .filter_map(|name| name.to_str().map(str::to_owned))
+            .filter(|name| name.ends_with(".safetensors"))
+            .map(|name| name.trim_end_matches(".safetensors").to_string())
+            .collect::<Vec<_>>();
+        voices.sort();
+        Ok(voices)
+    }
+
     fn load(model_dir: &Path, quality: Quality) -> Result<Self> {
         let bundle_dir = model_dir.join("onnx/english_2026-04");
         let bundle: Bundle =
@@ -150,15 +166,7 @@ impl PocketTts {
     }
 
     fn voices(&self) -> Result<Vec<String>> {
-        let mut voices = fs::read_dir(&self.voices_dir)?
-            .filter_map(|entry| entry.ok())
-            .filter_map(|entry| entry.path().file_name().map(|name| name.to_owned()))
-            .filter_map(|name| name.to_str().map(str::to_owned))
-            .filter(|name| name.ends_with(".safetensors"))
-            .map(|name| name.trim_end_matches(".safetensors").to_string())
-            .collect::<Vec<_>>();
-        voices.sort();
-        Ok(voices)
+        Self::list_voice_names(self.voices_dir.parent().unwrap_or(&self.voices_dir))
     }
 
     fn synthesize(&mut self, text: &str, voice: &str, speed: f32) -> Result<(Vec<f32>, u32)> {

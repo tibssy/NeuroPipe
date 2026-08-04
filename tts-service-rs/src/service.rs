@@ -297,16 +297,31 @@ impl TtsService {
     }
 
     fn list_voices(&mut self, message: &Value) -> Value {
-        if let Err(error) = self.ensure_engine(message) {
-            return json!({"voices": [], "status": "error", "message": error.to_string()});
-        }
-        let Ok(mut guard) = self.engine.lock() else {
-            return json!({"voices": []});
-        };
-        match guard.as_mut().unwrap().voices() {
+        let engine_name = message
+            .get("engine")
+            .and_then(Value::as_str)
+            .unwrap_or(&self.config.tts.defaults.engine)
+            .to_string();
+        match self.available_voices(&engine_name) {
             Ok(voices) => json!({"voices": voices}),
             Err(error) => json!({"voices": [], "status": "error", "message": error.to_string()}),
         }
+    }
+
+    fn available_voices(&mut self, engine_name: &str) -> Result<Vec<String>> {
+        if self.engine_name.as_deref() == Some(engine_name) {
+            if let Ok(mut guard) = self.engine.lock() {
+                if let Some(engine) = guard.as_mut() {
+                    return engine.voices();
+                }
+            }
+        }
+        let mut engine: Box<dyn TtsEngine> = match engine_name {
+            "kokoro" => Box::new(KokoroEngine::new(model_path(engine_name), Quality::High)),
+            "pocket-tts" => Box::new(PocketTtsEngine::new(model_path(engine_name), Quality::High)),
+            _ => return Err(anyhow!("unsupported Rust TTS engine '{engine_name}'")),
+        };
+        engine.voices()
     }
 
     fn validate_voice(&mut self, engine_name: &str, voice: &str) -> Result<()> {
@@ -320,14 +335,11 @@ impl TtsService {
             }
             return Ok(());
         }
-        let mut guard = self
-            .engine
-            .lock()
-            .map_err(|_| anyhow!("engine lock poisoned"))?;
-        let engine = guard
-            .as_mut()
-            .ok_or_else(|| anyhow!("TTS engine is not loaded"))?;
-        if engine.voices()?.iter().any(|available| available == voice) {
+        if self
+            .available_voices(engine_name)?
+            .iter()
+            .any(|available| available == voice)
+        {
             Ok(())
         } else {
             Err(anyhow!(
@@ -357,19 +369,14 @@ impl TtsService {
             .and_then(Value::as_str)
             .unwrap_or(&self.config.tts.defaults.quality)
             .to_string();
-        let quality_kind = match quality.as_str() {
-            "low" => Quality::Low,
-            "high" => Quality::High,
-            _ => return json!({"status": "error", "message": "Invalid quality"}),
-        };
+        if !matches!(quality.as_str(), "low" | "high") {
+            return json!({"status": "error", "message": "Invalid quality"});
+        }
         if engine != "kokoro" && engine != "pocket-tts" {
             return json!({"status": "error", "message": "Unsupported Rust TTS engine"});
         }
         if !(0.5..=2.0).contains(&speed) {
             return json!({"status": "error", "message": "Invalid speed"});
-        }
-        if let Err(error) = self.ensure_engine_quality(&engine, quality_kind) {
-            return json!({"status": "error", "message": error.to_string()});
         }
         if let Err(error) = self.validate_voice(&engine, &voice) {
             return json!({"status": "error", "message": error.to_string()});
