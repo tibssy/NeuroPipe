@@ -40,3 +40,16 @@ pub fn split_sentences(text: &str) -> Vec<String> {
         sentences
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::split_sentences;
+
+    #[test]
+    fn splits_sentences_without_losing_punctuation() {
+        assert_eq!(
+            split_sentences("First sentence. Second sentence!"),
+            vec!["First sentence.", "Second sentence!"]
+        );
+    }
+}

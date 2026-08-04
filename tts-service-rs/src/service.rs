@@ -531,3 +531,81 @@ fn playback_loop(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engines::Quality;
+
+    struct FakeEngine;
+
+    impl TtsEngine for FakeEngine {
+        fn load(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn unload(&mut self) {}
+
+        fn set_quality(&mut self, _quality: Quality) -> Result<()> {
+            Ok(())
+        }
+
+        fn voices(&mut self) -> Result<Vec<String>> {
+            Ok(vec!["test".to_string()])
+        }
+
+        fn synthesize(&mut self, text: &str, _voice: &str, _speed: f32) -> Result<(Vec<f32>, u32)> {
+            Ok((vec![text.len() as f32], 24_000))
+        }
+    }
+
+    #[test]
+    fn generation_worker_preserves_fifo_order() {
+        let (request_tx, request_rx) = mpsc::channel();
+        let (audio_tx, audio_rx) = mpsc::channel();
+        let engine: Arc<Mutex<Option<Box<dyn TtsEngine>>>> =
+            Arc::new(Mutex::new(Some(Box::new(FakeEngine))));
+        let generation = Arc::new(AtomicU64::new(0));
+        let generating = Arc::new(AtomicBool::new(true));
+        let pending = Arc::new(AtomicUsize::new(2));
+
+        let worker = thread::spawn({
+            let engine = Arc::clone(&engine);
+            let generation = Arc::clone(&generation);
+            let generating = Arc::clone(&generating);
+            let pending = Arc::clone(&pending);
+            move || {
+                generation_loop(
+                    request_rx, engine, audio_tx, generation, generating, pending,
+                )
+            }
+        });
+
+        request_tx
+            .send(GenerationRequest {
+                text: "first".to_string(),
+                voice: "test".to_string(),
+                speed: 1.0,
+                generation: 0,
+            })
+            .unwrap();
+        request_tx
+            .send(GenerationRequest {
+                text: "second".to_string(),
+                voice: "test".to_string(),
+                speed: 1.0,
+                generation: 0,
+            })
+            .unwrap();
+        drop(request_tx);
+        worker.join().unwrap();
+
+        let sentences = audio_rx
+            .into_iter()
+            .map(|chunk| chunk.sentence)
+            .collect::<Vec<_>>();
+        assert_eq!(sentences, vec!["first", "second"]);
+        assert!(!generating.load(Ordering::SeqCst));
+        assert_eq!(pending.load(Ordering::SeqCst), 0);
+    }
+}
