@@ -1,0 +1,26 @@
+[package]
+name = "neuro-stt-service"
+version = "0.1.0"
+edition = "2021"
+description = "NeuroPipe STT service with native Parakeet TDT inference"
+
+[[bin]]
+name = "neuro-stt-service"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+cpal = "0.16"
+libc = "0.2"
+ndarray = "0.16"
+ort = { version = "2.0.0-rc.13", features = ["ndarray"] }
+realfft = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+zmq = "0.10"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 3

@@ -42,3 +42,5 @@ cli/dist/
 assistant-service-rs/dist/
 tts-service-rs/target/
 tts-service-rs/dist/
+stt-service-rs/target/
+stt-service-rs/dist/
