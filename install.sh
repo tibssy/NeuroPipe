@@ -8,7 +8,7 @@ SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 NEUROPIPE_CONFIG_DIR="$HOME/.config/neuropipe"
 NEUROPIPE_CONFIG_FILE="$NEUROPIPE_CONFIG_DIR/config.toml"
 
-TTS_DIR="$ROOT_DIR/tts-service"
+TTS_DIR="$ROOT_DIR/tts-service-rs"
 STT_DIR="$ROOT_DIR/stt-service"
 ASSISTANT_DIR="$ROOT_DIR/assistant-service-rs"
 CLI_DIR="$ROOT_DIR/cli"
@@ -148,14 +148,18 @@ check_build_dependencies() {
   local selection="$1"
   local -a missing=()
 
-  command -v uv >/dev/null 2>&1 || missing+=("uv")
-  command -v python3 >/dev/null 2>&1 || missing+=("python3")
   command -v gcc >/dev/null 2>&1 || missing+=("gcc")
   command -v g++ >/dev/null 2>&1 || missing+=("g++")
   command -v make >/dev/null 2>&1 || missing+=("make")
   command -v cargo >/dev/null 2>&1 || missing+=("cargo")
-  command -v patchelf >/dev/null 2>&1 || missing+=("patchelf")
-  command -v ccache >/dev/null 2>&1 || missing+=("ccache")
+
+  # Only the legacy Python services and Nuitka packaging need these tools.
+  if [[ "$selection" != "1" ]]; then
+    command -v uv >/dev/null 2>&1 || missing+=("uv")
+    command -v python3 >/dev/null 2>&1 || missing+=("python3")
+    command -v patchelf >/dev/null 2>&1 || missing+=("patchelf")
+    command -v ccache >/dev/null 2>&1 || missing+=("ccache")
+  fi
 
   if [[ ${#missing[@]} -gt 0 ]]; then
     printf "\e[31mError: Missing required build dependencies:\e[0m\n"
