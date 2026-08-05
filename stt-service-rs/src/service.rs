@@ -39,15 +39,17 @@ impl SttService {
 
     pub fn run(&mut self) -> Result<()> {
         let initial_mode = self.config.stt.mode.clone();
-        let vad_path = self.config.vad_path();
-        self.ensure_vad(&vad_path)?;
 
         let (audio_tx, audio_rx) = mpsc::channel();
+        let _mic;
         if let Some(wav) = std::env::var_os("FAKE_MIC") {
             crate::audio::FakeMic::open(wav, audio_tx)?;
         } else {
-            let _mic = MicInput::open(audio_tx)?;
+            _mic = MicInput::open(audio_tx)?;
         }
+
+        let vad_path = self.config.vad_path();
+        self.ensure_vad(&vad_path)?;
 
         let context = zmq::Context::new();
         let pub_sock = context.socket(zmq::PUB)?;
