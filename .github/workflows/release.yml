@@ -25,37 +25,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y patchelf espeak-ng libzmq3-dev
+        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev
 
       - name: Build TTS service
-        working-directory: tts-service
-        run: chmod +x build.sh && ./build.sh
+        working-directory: tts-service-rs
+        run: cargo build --release
 
       - name: Build STT service
-        working-directory: stt-service
-        run: chmod +x build.sh && ./build.sh
+        working-directory: stt-service-rs
+        run: cargo build --release
 
       - name: Build Assistant service
-        working-directory: assistant-service
-        run: chmod +x build.sh && ./build.sh
+        working-directory: assistant-service-rs
+        run: cargo build --release
 
       - name: Build CLI
         run: cargo build --release --manifest-path cli/Cargo.toml
 
       - name: Rename binaries with architecture suffix
         run: |
-          cp tts-service/dist/neuro-tts-service tts-service/dist/neuro-tts-service-linux-${{ matrix.arch }}
-          cp stt-service/dist/neuro-stt-service stt-service/dist/neuro-stt-service-linux-${{ matrix.arch }}
-          cp assistant-service/dist/neuro-assistant-service assistant-service/dist/neuro-assistant-service-linux-${{ matrix.arch }}
+          cp tts-service-rs/target/release/neuro-tts-service tts-service-rs/target/release/neuro-tts-service-linux-${{ matrix.arch }}
+          cp stt-service-rs/target/release/neuro-stt-service stt-service-rs/target/release/neuro-stt-service-linux-${{ matrix.arch }}
+          cp assistant-service-rs/target/release/neuro-assistant-service assistant-service-rs/target/release/neuro-assistant-service-linux-${{ matrix.arch }}
           cp cli/target/release/neuro-ipc cli/target/release/neuro-ipc-linux-${{ matrix.arch }}
 
       - name: Upload build artifacts
@@ -63,9 +58,9 @@ jobs:
         with:
           name: neuropipe-linux-${{ matrix.arch }}
           path: |
-            tts-service/dist/neuro-tts-service-linux-${{ matrix.arch }}
-            stt-service/dist/neuro-stt-service-linux-${{ matrix.arch }}
-            assistant-service/dist/neuro-assistant-service-linux-${{ matrix.arch }}
+            tts-service-rs/target/release/neuro-tts-service-linux-${{ matrix.arch }}
+            stt-service-rs/target/release/neuro-stt-service-linux-${{ matrix.arch }}
+            assistant-service-rs/target/release/neuro-assistant-service-linux-${{ matrix.arch }}
             cli/target/release/neuro-ipc-linux-${{ matrix.arch }}
 
   publish-release:

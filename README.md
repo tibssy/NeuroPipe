@@ -25,14 +25,10 @@ Runtime dependencies checked by the installer:
 
 Build dependencies checked for source installs:
 
-- `uv`
-- `python3`
 - `gcc`
 - `g++`
 - `make`
-- `cargo` (Rust toolchain, for `neuro-ipc`)
-- `patchelf`
-- `ccache`
+- `cargo` (Rust toolchain for all services and `neuro-ipc`)
 
 Assistant dependency:
 
