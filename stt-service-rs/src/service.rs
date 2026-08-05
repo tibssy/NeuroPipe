@@ -17,7 +17,6 @@ const CHUNKS_PER_SEC: f64 = SAMPLE_RATE as f64 / WINDOW_SIZE as f64;
 const MAX_SILENCE_CHUNKS: usize = (SILENCE_DURATION_MS as f64 / 1000.0 * CHUNKS_PER_SEC) as usize;
 const PRE_RECORD_CHUNKS: usize = (PRE_RECORD_MS as f64 / 1000.0 * CHUNKS_PER_SEC) as usize;
 const MAX_RECORDING_CHUNKS: usize = (MAX_RECORDING_SECONDS as f64 * CHUNKS_PER_SEC) as usize;
-const MAX_AUDIO_CHUNKS_PER_LOOP: usize = 8;
 
 pub struct SttService {
     config: Config,
@@ -103,32 +102,28 @@ impl SttService {
                 );
             }
 
-            // Keep consuming audio while idle. Otherwise a continuously-running
-            // source (including FAKE_MIC) builds an unbounded stale backlog.
-            for _ in 0..MAX_AUDIO_CHUNKS_PER_LOOP {
-                let mut chunk = match audio_rx.try_recv() {
-                    Ok(chunk) => chunk,
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
-                };
-                if mode == "IDLE" {
-                    continue;
-                }
-                self.apply_gain(&mut chunk);
-                match mode.as_str() {
-                    "VAD" => {
-                        self.process_vad(
-                            chunk,
-                            &mut pre_speech,
-                            &mut recorded,
-                            &mut is_recording,
-                            &mut silence_counter,
-                            &pub_sock,
-                            &job_tx,
-                        );
+            if mode != "IDLE" {
+                match audio_rx.try_recv() {
+                    Ok(mut chunk) => {
+                        self.apply_gain(&mut chunk);
+                        match mode.as_str() {
+                            "VAD" => {
+                                self.process_vad(
+                                    chunk,
+                                    &mut pre_speech,
+                                    &mut recorded,
+                                    &mut is_recording,
+                                    &mut silence_counter,
+                                    &pub_sock,
+                                    &job_tx,
+                                );
+                            }
+                            "MANUAL" => recorded.push(chunk),
+                            _ => {}
+                        }
                     }
-                    "MANUAL" => recorded.push(chunk),
-                    _ => {}
+                    Err(mpsc::TryRecvError::Empty) => {}
+                    Err(mpsc::TryRecvError::Disconnected) => break,
                 }
             }
         }

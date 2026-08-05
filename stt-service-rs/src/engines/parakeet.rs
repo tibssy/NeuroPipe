@@ -2,7 +2,7 @@ use crate::engines::SttEngine;
 use anyhow::{anyhow, Context, Result};
 use ndarray::Array2;
 use ort::session::Session;
-use ort::value::{Tensor, TensorRef};
+use ort::value::Tensor;
 use realfft::num_complex::Complex;
 use realfft::RealFftPlanner;
 use std::path::Path;
@@ -312,18 +312,14 @@ impl Parakeet {
         encoder_out: &ndarray::Array2<f32>,
     ) -> Result<(Vec<f32>, usize, Vec<f32>, Vec<f32>)> {
         let prev = tokens.last().copied().unwrap_or(self.blank_idx) as i32;
-        let prev_buf = [prev];
-        let one_i32 = [1i32];
 
-        let state1_shape = self.state1_shape.iter().map(|&d| d as usize).collect::<Vec<_>>();
-        let state2_shape = self.state2_shape.iter().map(|&d| d as usize).collect::<Vec<_>>();
         let frame_len = encoder_out.shape()[1];
-        let frame_row = encoder_out.row(t);
-        let encoder_outputs = TensorRef::from_array_view((vec![1usize, frame_len, 1], frame_row.as_slice().unwrap_or(&[])))?;
-        let targets = TensorRef::from_array_view((vec![1usize, 1usize], &prev_buf[..]))?;
-        let target_length = TensorRef::from_array_view((vec![1usize], &one_i32[..]))?;
-        let input_states_1 = TensorRef::from_array_view((state1_shape.clone(), s1))?;
-        let input_states_2 = TensorRef::from_array_view((state2_shape.clone(), s2))?;
+        let frame: Vec<f32> = encoder_out.row(t).to_vec();
+        let encoder_outputs = Tensor::from_array((vec![1usize, frame_len, 1], frame))?;
+        let targets = Tensor::from_array((vec![1usize, 1usize], vec![prev]))?;
+        let target_length = Tensor::from_array((vec![1usize], vec![1i32]))?;
+        let input_states_1 = Tensor::from_array((self.state1_shape.iter().map(|&d| d as usize).collect::<Vec<_>>(), s1.to_vec()))?;
+        let input_states_2 = Tensor::from_array((self.state2_shape.iter().map(|&d| d as usize).collect::<Vec<_>>(), s2.to_vec()))?;
 
         let outputs = self.decoder_joint.run(ort::inputs![
             "encoder_outputs" => encoder_outputs,
@@ -353,14 +349,14 @@ impl Parakeet {
 }
 
 fn build_session(path: &Path) -> Result<Session> {
-    let intra_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .max(1);
     Session::builder()
         .map_err(|error| anyhow!("create ONNX session builder: {error}"))?
-        .with_intra_threads(intra_threads)
+        .with_intra_threads(4)
         .map_err(|error| anyhow!("configure ONNX session: {error}"))?
+        .with_memory_pattern(false)
+        .map_err(|error| anyhow!("disable ONNX memory patterns: {error}"))?
+        .with_config_entry("CPUExecutionProvider.use_arena", "0")
+        .map_err(|error| anyhow!("disable ONNX CPU arena: {error}"))?
         .commit_from_file(path)
         .map_err(|error| anyhow!("ort commit {path:?}: {error}"))
 }
