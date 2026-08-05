@@ -56,7 +56,15 @@ fn expand_home(path: &str) -> String {
 
 impl Config {
     pub fn stt_model_dir(&self) -> PathBuf {
-        expand_home(&self.stt.model_dir).into()
+        PathBuf::from(expand_home(&self.stt.model_dir))
+    }
+
+    /// Path to the Silero VAD ONNX model, stored alongside the model dir.
+    pub fn vad_path(&self) -> PathBuf {
+        let dir = self.stt_model_dir();
+        dir.parent()
+            .map(|p| p.join("silero_vad.onnx"))
+            .unwrap_or_else(|| dir.join("silero_vad.onnx"))
     }
 }
 

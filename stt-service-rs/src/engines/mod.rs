@@ -2,8 +2,6 @@ pub mod parakeet;
 
 use anyhow::Result;
 
-pub const SAMPLE_RATE: u32 = 16_000;
-
 pub trait SttEngine {
     fn load(&mut self) -> Result<()>;
     fn unload(&mut self);

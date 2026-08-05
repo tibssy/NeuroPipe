@@ -1,5 +1,8 @@
+mod audio;
 mod config;
 mod engines;
+mod service;
+mod vad;
 
 use anyhow::{bail, Context, Result};
 use engines::SttEngine;
@@ -22,17 +25,8 @@ fn main() -> Result<()> {
     }
 
     let cfg = config::load();
-    let model_dir = cfg.stt_model_dir();
-    let engine = engines::parakeet::ParakeetEngine::new(&model_dir, cfg.stt.quantization.clone());
-
-    eprintln!("NeuroPipe STT service (native)");
-    eprintln!("STT engine: {} (quantization: {})", cfg.stt.model, cfg.stt.quantization);
-    eprintln!("STT events: {}", cfg.ipc.stt_pub);
-    eprintln!("STT cmd:    {}", cfg.ipc.stt_cmd);
-
-    // Service wiring lands next.
-    let _ = engine;
-    Ok(())
+    let mut svc = service::SttService::new(cfg);
+    svc.run()
 }
 
 /// Read a RIFF/WAVE file into mono float32 samples, resampling from the file's

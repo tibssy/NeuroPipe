@@ -4,6 +4,7 @@ set -euo pipefail
 
 MODEL_DIR="${1:-$HOME/.local/share/neuropipe/stt/parakeet-v3}"
 QUANT="${QUANT:-int8}"  # int8 (default) | fp32
+VAD_DIR="${VAD_DIR:-$HOME/.local/share/neuropipe/stt}"
 
 BASE="https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main"
 mkdir -p "$MODEL_DIR"
@@ -23,3 +24,10 @@ else
 fi
 
 echo "Done."
+echo ""
+echo "Downloading Silero VAD model -> $VAD_DIR"
+mkdir -p "$VAD_DIR"
+curl -fL --progress-bar \
+  "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx" \
+  -o "$VAD_DIR/silero_vad.onnx"
+echo "All done."
