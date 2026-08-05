@@ -162,7 +162,7 @@ Two engines available: `kokoro` (default) and `pocket-tts`. Models auto-download
 - `--speed`: playback speed (0.5–2.0)
 - `--quality`: `low` (faster) or `high` (better quality)
 
-Pocket-tts voice embeddings are from [Kyutai](https://kyutai.org/), licensed under [CC-BY-4.0](tts-service/VOICE_CREDITS.md).
+Pocket-tts voice embeddings are from [Kyutai](https://kyutai.org/), licensed under [CC-BY-4.0](tts-service-rs/VOICE_CREDITS.md).
 
 ### Assistant (STT + Ollama + TTS)
 
