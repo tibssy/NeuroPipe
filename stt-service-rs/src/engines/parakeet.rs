@@ -255,14 +255,18 @@ impl Parakeet {
         // encoder output is [1, features, T_enc] (feature-major, time minor); the
         // t-th frame's feature vector is strided, not contiguous. Reshape to
         // [T_enc, features] the way onnx-asr's encoder_out.transpose(0,2,1) does.
+        // NOTE: the model may emit one more padded time frame than encoded_lengths
+        // (e.g. 81 frames vs enc_len 80), so stride by the actual time extent.
         if enc_data.is_empty() || enc_len == 0 {
             return Ok(ndarray::Array2::<f32>::zeros((0, 1024)));
         }
-        let frame_len = enc_data.len() / enc_len;
-        let mut out = ndarray::Array2::<f32>::zeros((enc_len, frame_len));
+        let feature_dim = 1024;
+        let t_enc = enc_data.len() / feature_dim;
+        let frames = enc_len.min(t_enc);
+        let mut out = ndarray::Array2::<f32>::zeros((frames, feature_dim));
         for (t, mut row) in out.rows_mut().into_iter().enumerate() {
             for (f, cell) in row.iter_mut().enumerate() {
-                *cell = enc_data[f * enc_len + t];
+                *cell = enc_data[f * t_enc + t];
             }
         }
         Ok(out)

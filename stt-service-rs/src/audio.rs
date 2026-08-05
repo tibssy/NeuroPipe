@@ -72,3 +72,51 @@ fn resample(input: &[f32], from_rate: f64, to_rate: f64) -> Vec<f32> {
     }
     out
 }
+
+/// Test-only source: replays a 16 kHz PCM16 WAV into the audio channel,
+/// then continues emitting silence so the service keeps running.
+pub struct FakeMic;
+
+impl FakeMic {
+    pub fn open(wav: impl AsRef<std::path::Path>, tx: mpsc::Sender<Vec<f32>>) -> Result<Self> {
+        let data = std::fs::read(wav.as_ref())
+            .with_context(|| format!("read fake mic wav {}", wav.as_ref().display()))?;
+        let mut pcm: Vec<i16> = Vec::new();
+        let mut offset = 12;
+        while offset + 8 <= data.len() {
+            let size =
+                u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()) as usize;
+            if &data[offset..offset + 4] == b"data" {
+                for i in (0..size).step_by(2) {
+                    if offset + 8 + i + 2 <= data.len() {
+                        pcm.push(i16::from_le_bytes(
+                            data[offset + 8 + i..offset + 10 + i].try_into().unwrap(),
+                        ));
+                    }
+                }
+                break;
+            }
+            offset = offset + 8 + size + (size & 1);
+        }
+        let samples: Vec<f32> = pcm.iter().map(|&s| s as f32 / 32768.0).collect();
+
+        std::thread::spawn(move || {
+            for frame in samples.chunks(WINDOW_SIZE) {
+                let mut buf = vec![0.0f32; WINDOW_SIZE];
+                buf[..frame.len()].copy_from_slice(frame);
+                if tx.send(buf).is_err() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            // keep sending silence forever so the loop keeps consuming
+            loop {
+                if tx.send(vec![0.0f32; WINDOW_SIZE]).is_err() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        Ok(FakeMic)
+    }
+}
