@@ -9,7 +9,7 @@ NEUROPIPE_CONFIG_DIR="$HOME/.config/neuropipe"
 NEUROPIPE_CONFIG_FILE="$NEUROPIPE_CONFIG_DIR/config.toml"
 
 TTS_DIR="$ROOT_DIR/tts-service-rs"
-STT_DIR="$ROOT_DIR/stt-service"
+STT_DIR="$ROOT_DIR/stt-service-rs"
 ASSISTANT_DIR="$ROOT_DIR/assistant-service-rs"
 CLI_DIR="$ROOT_DIR/cli"
 RELEASE_API_URL="https://api.github.com/repos/tibssy/NeuroPipe/releases/latest"
@@ -76,35 +76,35 @@ print_dependency_install_hint() {
       if [[ "$profile" == "runtime" ]]; then
         printf "  sudo pacman -S --needed systemd\n"
       else
-        printf "  sudo pacman -S --needed base-devel python patchelf ccache\n"
+        printf "  sudo pacman -S --needed base-devel\n"
       fi
       ;;
     apt)
       if [[ "$profile" == "runtime" ]]; then
         printf "  sudo apt-get install -y systemd\n"
       else
-        printf "  sudo apt-get install -y build-essential python3 patchelf ccache\n"
+        printf "  sudo apt-get install -y build-essential\n"
       fi
       ;;
     dnf)
       if [[ "$profile" == "runtime" ]]; then
         printf "  sudo dnf install -y systemd\n"
       else
-        printf "  sudo dnf install -y gcc gcc-c++ make python3 patchelf ccache\n"
+        printf "  sudo dnf install -y gcc gcc-c++ make\n"
       fi
       ;;
     zypper)
       if [[ "$profile" == "runtime" ]]; then
         printf "  sudo zypper install -y systemd\n"
       else
-        printf "  sudo zypper install -y gcc gcc-c++ make python3 patchelf ccache\n"
+        printf "  sudo zypper install -y gcc gcc-c++ make\n"
       fi
       ;;
     apk)
       if [[ "$profile" == "runtime" ]]; then
         printf "  sudo apk add systemd\n"
       else
-        printf "  sudo apk add build-base python3 patchelf ccache\n"
+        printf "  sudo apk add build-base\n"
       fi
       ;;
     *)
@@ -152,14 +152,6 @@ check_build_dependencies() {
   command -v g++ >/dev/null 2>&1 || missing+=("g++")
   command -v make >/dev/null 2>&1 || missing+=("make")
   command -v cargo >/dev/null 2>&1 || missing+=("cargo")
-
-  # Only the legacy Python services and Nuitka packaging need these tools.
-  if [[ "$selection" != "1" ]]; then
-    command -v uv >/dev/null 2>&1 || missing+=("uv")
-    command -v python3 >/dev/null 2>&1 || missing+=("python3")
-    command -v patchelf >/dev/null 2>&1 || missing+=("patchelf")
-    command -v ccache >/dev/null 2>&1 || missing+=("ccache")
-  fi
 
   if [[ ${#missing[@]} -gt 0 ]]; then
     printf "\e[31mError: Missing required build dependencies:\e[0m\n"
