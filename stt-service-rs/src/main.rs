@@ -24,6 +24,83 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Some(pos) = raw_args.iter().position(|a| a == "--vad-file") {
+        let wav = raw_args.get(pos + 1).ok_or_else(|| anyhow::anyhow!("--vad-file needs a wav path"))?;
+        let cfg = config::load();
+        let mut vad = vad::Vad::load(cfg.vad_path())?;
+        let samples = read_wav_f32(wav)?;
+        let mut best = 0.0f32;
+        let mut n = 0usize;
+        let mut wins = 0usize;
+        for frame in samples.chunks(512) {
+            let mut f = vec![0.0f32; 512];
+            f[..frame.len()].copy_from_slice(frame);
+            let p = vad.predict(&f)?;
+            best = best.max(p);
+            if p > 0.1 {
+                wins += 1;
+            }
+            n += 1;
+        }
+        println!("frames={n} best_vad={best:.4} frames_over_0.1={wins}");
+        return Ok(());
+    }
+
+    if let Some(pos) = raw_args.iter().position(|a| a == "--debug-mic") {
+        let seconds = raw_args
+            .get(pos + 1)
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(5);
+        let cfg = config::load();
+        let mut vad = vad::Vad::load(cfg.vad_path())?;
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<f32>>();
+        let _mic = audio::MicInput::open(tx)?;
+        let mut best = 0.0f32;
+        let mut peak_rms = 0.0f32;
+        let mut frames = 0usize;
+        let mut non_silent = 0usize;
+        let dump_path = std::env::var("NEUROPIPE_DUMP_MIC").ok();
+        let mut dump: Vec<f32> = Vec::new();
+        let start = std::time::Instant::now();
+        while start.elapsed().as_secs() < seconds {
+            match rx.try_recv() {
+                Ok(chunk) => {
+                    frames += 1;
+                    if dump_path.is_some() {
+                        dump.extend_from_slice(&chunk);
+                    }
+                    let rms = (chunk.iter().map(|v| v * v).sum::<f32>() / chunk.len() as f32).sqrt();
+                    peak_rms = peak_rms.max(rms);
+                    if rms > 0.005 {
+                        non_silent += 1;
+                    }
+                    let p = vad.predict(&chunk).unwrap_or(0.0);
+                    best = best.max(p);
+                    if rms > 0.005 {
+                        eprintln!("[dbg] frame={frames} len={} rms={rms:.4} vad={p:.4}", chunk.len());
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        if let Some(path) = dump_path {
+            let raw = dump
+                .iter()
+                .flat_map(|&v| {
+                    let s = (v.clamp(-1.0, 1.0) * 32767.0) as i16;
+                    s.to_le_bytes()
+                })
+                .collect::<Vec<u8>>();
+            let _ = std::fs::write(&path, &raw);
+            eprintln!("[dbg] dumped {} samples to {}", dump.len(), path);
+        }
+        println!(
+            "frames={frames} peak_rms={peak_rms:.4} non_silent={non_silent} best_vad={best:.4}"
+        );
+        return Ok(());
+    }
+
     let cfg = config::load();
     let mut svc = service::SttService::new(cfg);
     svc.run()

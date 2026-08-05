@@ -20,55 +20,82 @@ impl MicInput {
         let device = host
             .default_input_device()
             .ok_or_else(|| anyhow!("no default input device"))?;
-        let config = device
-            .default_input_config()
-            .context("query default input config")?;
 
-        let channels = config.channels() as usize;
-        let device_rate = config.sample_rate().0 as f64;
-        let out_rate = SAMPLE_RATE as f64;
-
-        let stream = device
-            .build_input_stream(
-                &config.config(),
+        // Preferred: request mono 16 kHz F32 natively so the device (via
+        // ALSA/PipeWire) resamples once; avoids a second resample in-process.
+        let preferred = cpal::StreamConfig {
+            channels: 1,
+            sample_rate: cpal::SampleRate(SAMPLE_RATE),
+            buffer_size: cpal::BufferSize::Default,
+        };
+        let stream = match device.build_input_stream(
+            &preferred,
+            {
+                let tx = tx.clone();
                 move |data: &[f32], _| {
-                    let mut acc = vec![0.0f32; WINDOW_SIZE];
-                    let mut fill = 0usize;
-                    for frame in data.chunks_exact(channels) {
-                        let mono: f32 = frame.iter().sum::<f32>() / channels as f32;
-                        acc[fill] = mono;
-                        fill += 1;
-                        if fill == WINDOW_SIZE {
-                            let frame = if device_rate != out_rate {
-                                resample(&acc, device_rate, out_rate)
-                            } else {
-                                acc.clone()
-                            };
-                            let _ = tx.send(frame);
-                            fill = 0;
-                        }
+                    for chunk in data.chunks_exact(WINDOW_SIZE) {
+                        let _ = tx.send(chunk.to_vec());
                     }
-                },
-                move |err| {
-                    eprintln!("[STT] mic stream error: {err}");
-                },
-                None,
-            )
-            .context("open microphone input stream")?;
+                }
+            },
+            on_mic_error,
+            None,
+        ) {
+            Ok(stream) => stream,
+            Err(_) => {
+                // Fall back: open the device's default config, downmix channels
+                // to mono and resample to 16 kHz in WINDOW_SIZE frames.
+                let config = device
+                    .default_input_config()
+                    .context("query default input config")?;
+                let channels = config.channels() as usize;
+                let device_rate = config.sample_rate().0 as f64;
+                let out_rate = SAMPLE_RATE as f64;
+                let block_len =
+                    ((WINDOW_SIZE as f64 * device_rate / out_rate).ceil()) as usize;
+                let mut acc: Vec<f32> = Vec::with_capacity(block_len);
+                device
+                    .build_input_stream(
+                        &config.config(),
+                        move |data: &[f32], _| {
+                            for frame in data.chunks_exact(channels) {
+                                let mono: f32 = frame.iter().sum::<f32>() / channels as f32;
+                                acc.push(mono);
+                                if acc.len() >= block_len {
+                                    let frame = resample(&acc, device_rate, out_rate);
+                                    acc.clear();
+                                    let _ = tx.send(frame);
+                                }
+                            }
+                        },
+                        on_mic_error,
+                        None,
+                    )
+                    .context("open microphone input stream (fallback config)")?
+            }
+        };
 
         stream.play().context("start microphone stream")?;
         Ok(MicInput { stream })
     }
 }
 
-/// Linear resample (good enough for mic capture).
+fn on_mic_error(err: cpal::StreamError) {
+    eprintln!("[STT] mic stream error: {err}");
+}
+
+/// Linear-interpolation resample a device-rate block down to `WINDOW_SIZE`
+/// samples at the target rate, so every emitted frame is a full VAD window.
 fn resample(input: &[f32], from_rate: f64, to_rate: f64) -> Vec<f32> {
     let scale = from_rate / to_rate;
-    let out_len = (input.len() as f64 / scale).round() as usize;
-    let mut out = Vec::with_capacity(out_len);
-    for i in 0..out_len {
-        let src = (i as f64 * scale) as usize;
-        out.push(input.get(src).copied().unwrap_or(0.0));
+    let mut out = Vec::with_capacity(WINDOW_SIZE);
+    for i in 0..WINDOW_SIZE {
+        let pos = i as f64 * scale;
+        let a = pos as usize;
+        let frac = pos - a as f64;
+        let v0 = input.get(a).copied().unwrap_or(0.0);
+        let v1 = input.get(a + 1).copied().unwrap_or(v0);
+        out.push(v0 + (v1 - v0) * frac as f32);
     }
     out
 }

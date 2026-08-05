@@ -27,7 +27,8 @@ echo "Done."
 echo ""
 echo "Downloading Silero VAD model -> $VAD_DIR"
 mkdir -p "$VAD_DIR"
+# v6 export (onnx-community) — v5 ONNX from snakers4 under-scores TTS/real speech
 curl -fL --progress-bar \
-  "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx" \
+  "https://huggingface.co/onnx-community/silero-vad/resolve/main/onnx/model.onnx" \
   -o "$VAD_DIR/silero_vad.onnx"
 echo "All done."

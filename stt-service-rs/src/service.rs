@@ -20,7 +20,7 @@ const MAX_RECORDING_CHUNKS: usize = (MAX_RECORDING_SECONDS as f64 * CHUNKS_PER_S
 
 pub struct SttService {
     config: Config,
-    engine: ParakeetEngine,
+    engine: Option<ParakeetEngine>,
     vad: Option<Vad>,
     last_activity: Arc<Mutex<Instant>>,
 }
@@ -31,7 +31,7 @@ impl SttService {
         let model_dir = config.stt_model_dir();
         Self {
             config,
-            engine: ParakeetEngine::new(model_dir, stt.quantization.clone()),
+            engine: Some(ParakeetEngine::new(model_dir, stt.quantization.clone())),
             vad: None,
             last_activity: Arc::new(Mutex::new(Instant::now())),
         }
@@ -50,6 +50,17 @@ impl SttService {
 
         let vad_path = self.config.vad_path();
         self.ensure_vad(&vad_path)?;
+
+        // Transcribe in a background worker (like the legacy Python service) so
+        // the audio/VAD loop is never blocked by ASR inference.
+        let engine = Arc::new(Mutex::new(self.engine.take().expect("engine")));
+        let (job_tx, job_rx) = mpsc::channel::<Vec<f32>>();
+        let (result_tx, result_rx) = mpsc::channel::<String>();
+        let idle_timeout = Duration::from_secs(self.config.stt.model_idle_timeout_sec);
+        let last_activity = Arc::clone(&self.last_activity);
+        std::thread::Builder::new()
+            .name("stt-transcriber".to_string())
+            .spawn(move || transcription_worker(job_rx, result_tx, engine, last_activity, idle_timeout))?;
 
         let context = zmq::Context::new();
         let pub_sock = context.socket(zmq::PUB)?;
@@ -77,8 +88,18 @@ impl SttService {
                     &mut recorded,
                     &mut is_recording,
                     &pub_sock,
+                    &job_tx,
                 );
                 rep_sock.send(response.to_string().as_bytes(), 0)?;
+            }
+
+            // Publish completed transcriptions from the worker thread.
+            while let Ok(text) = result_rx.try_recv() {
+                eprintln!("[STT] > {text}");
+                let _ = pub_sock.send(
+                    json!({"event": "transcription", "text": text}).to_string().as_bytes(),
+                    0,
+                );
             }
 
             if mode != "IDLE" {
@@ -94,6 +115,7 @@ impl SttService {
                                     &mut is_recording,
                                     &mut silence_counter,
                                     &pub_sock,
+                                    &job_tx,
                                 );
                             }
                             "MANUAL" => recorded.push(chunk),
@@ -104,7 +126,6 @@ impl SttService {
                     Err(mpsc::TryRecvError::Disconnected) => break,
                 }
             }
-            self.check_idle();
         }
         #[allow(unreachable_code)]
         Ok(())
@@ -118,6 +139,7 @@ impl SttService {
         is_recording: &mut bool,
         silence_counter: &mut usize,
         pub_sock: &zmq::Socket,
+        job_tx: &mpsc::Sender<Vec<f32>>,
     ) {
         let threshold = self.config.stt.vad_threshold;
         let prob = self
@@ -161,27 +183,10 @@ impl SttService {
                     json!({"event": "listening_end"}).to_string().as_bytes(),
                     0,
                 );
-                self.transcribe_and_publish(full, pub_sock);
+                touch_activity(&self.last_activity);
+                let _ = job_tx.send(full);
             }
         }
-    }
-
-    fn transcribe_and_publish(&mut self, samples: Vec<f32>, pub_sock: &zmq::Socket) {
-        self.touch_activity();
-        match self.engine.transcribe(&samples) {
-            Ok(text) => {
-                let text = text.trim();
-                if !text.is_empty() {
-                    eprintln!("[STT] > {text}");
-                    let _ = pub_sock.send(
-                        json!({"event": "transcription", "text": text}).to_string().as_bytes(),
-                        0,
-                    );
-                }
-            }
-            Err(error) => eprintln!("[STT] transcription error: {error:#}"),
-        }
-        self.touch_activity();
     }
 
     fn handle_command(
@@ -192,6 +197,7 @@ impl SttService {
         recorded: &mut Vec<Vec<f32>>,
         is_recording: &mut bool,
         pub_sock: &zmq::Socket,
+        job_tx: &mpsc::Sender<Vec<f32>>,
     ) -> Value {
         match message.get("command").and_then(Value::as_str) {
             Some("get_state") => json!({
@@ -219,19 +225,20 @@ impl SttService {
                     json!({"event": "mode_changed", "mode": mode}).to_string().as_bytes(),
                     0,
                 );
-                self.touch_activity();
+                touch_activity(&self.last_activity);
                 json!({"status": "ok"})
             }
             Some("manual_stop") => {
                 if !recorded.is_empty() {
                     let full = std::mem::take(recorded).concat();
-                    self.transcribe_and_publish(full, pub_sock);
+                    touch_activity(&self.last_activity);
+                    let _ = job_tx.send(full);
                 }
                 *mode = "IDLE".to_string();
                 *is_recording = false;
                 recorded.clear();
                 pre_speech.clear();
-                self.touch_activity();
+                touch_activity(&self.last_activity);
                 json!({"status": "ok"})
             }
             Some(command) => json!({"status": "error", "message": format!("Unknown command '{command}'")}),
@@ -253,33 +260,64 @@ impl SttService {
         self.vad = Some(Vad::load(path)?);
         Ok(())
     }
+}
 
-    fn touch_activity(&self) {
-        if let Ok(mut a) = self.last_activity.lock() {
-            *a = Instant::now();
-        }
+fn touch_activity(last_activity: &Arc<Mutex<Instant>>) {
+    if let Ok(mut a) = last_activity.lock() {
+        *a = Instant::now();
     }
+}
 
-    /// Unload the STT model if idle for longer than the configured timeout.
-    fn check_idle(&mut self) {
-        let timeout = Duration::from_secs(self.config.stt.model_idle_timeout_sec);
-        let idle_for = self
-            .last_activity
-            .lock()
-            .map(|a| a.elapsed())
-            .unwrap_or_default();
-        if idle_for < timeout || !self.engine.is_loaded() {
-            return;
+/// Background thread: transcribe queued audio and unload the ASR model when
+/// idle, so the audio loop never blocks on inference.
+fn transcription_worker(
+    job_rx: mpsc::Receiver<Vec<f32>>,
+    result_tx: mpsc::Sender<String>,
+    engine: Arc<Mutex<ParakeetEngine>>,
+    last_activity: Arc<Mutex<Instant>>,
+    idle_timeout: Duration,
+) {
+    loop {
+        match job_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(samples) => {
+                let text = {
+                    let mut engine = engine.lock().unwrap();
+                    engine.transcribe(&samples)
+                }
+                .map(|t| t.trim().to_string())
+                .unwrap_or_else(|error| {
+                    eprintln!("[STT] transcription error: {error:#}");
+                    String::new()
+                });
+                touch_activity(&last_activity);
+                if !text.is_empty() {
+                    let _ = result_tx.send(text);
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let idle_for = last_activity
+                    .lock()
+                    .map(|a| a.elapsed())
+                    .unwrap_or_default();
+                if idle_for < idle_timeout {
+                    continue;
+                }
+                let should_unload = {
+                    let engine = engine.lock().unwrap();
+                    engine.is_loaded()
+                };
+                if should_unload {
+                    eprintln!("[STT] idle for {}s; unloading model", idle_timeout.as_secs());
+                    {
+                        let mut engine = engine.lock().unwrap();
+                        engine.unload();
+                    }
+                    touch_activity(&last_activity);
+                    trim_process_heap();
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        eprintln!(
-            "[STT] idle for {}s; unloading model",
-            self.config.stt.model_idle_timeout_sec
-        );
-        self.engine.unload();
-        if let Ok(mut a) = self.last_activity.lock() {
-            *a = Instant::now();
-        }
-        trim_process_heap();
     }
 }
 
