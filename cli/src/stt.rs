@@ -15,13 +15,14 @@ fn send_set_mode(mode: &str) {
 
 pub fn trigger() {
     eprintln!("Listening...");
-    send_set_mode("VAD");
 
     let ctx = zmq::Context::new();
     let sub = match zmq_client::create_sub(&ctx, zmq_client::stt_pub()) {
         Ok(s) => s,
         Err(e) => { eprintln!("Error: {}", e); send_set_mode("IDLE"); return; }
     };
+    // Subscribe before enabling VAD so the listening_start event is not lost.
+    send_set_mode("VAD");
 
     loop {
         match sub.recv_bytes(0) {

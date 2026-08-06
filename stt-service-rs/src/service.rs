@@ -101,7 +101,11 @@ impl SttService {
                 );
             }
 
-            if mode != "IDLE" {
+            if mode == "IDLE" {
+                // Keep the always-on microphone queue fresh while inactive.
+                // Otherwise stale audio is processed by the next trigger.
+                while audio_rx.try_recv().is_ok() {}
+            } else {
                 match audio_rx.try_recv() {
                     Ok(mut chunk) => {
                         self.apply_gain(&mut chunk);
