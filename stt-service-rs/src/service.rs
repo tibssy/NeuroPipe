@@ -10,11 +10,9 @@ use std::time::{Duration, Instant};
 
 pub const SAMPLE_RATE: u32 = 16_000;
 
-const SILENCE_DURATION_MS: u64 = 1000;
 const PRE_RECORD_MS: u64 = 500;
 const MAX_RECORDING_SECONDS: u64 = 15;
 const CHUNKS_PER_SEC: f64 = SAMPLE_RATE as f64 / WINDOW_SIZE as f64;
-const MAX_SILENCE_CHUNKS: usize = (SILENCE_DURATION_MS as f64 / 1000.0 * CHUNKS_PER_SEC) as usize;
 const PRE_RECORD_CHUNKS: usize = (PRE_RECORD_MS as f64 / 1000.0 * CHUNKS_PER_SEC) as usize;
 const MAX_RECORDING_CHUNKS: usize = (MAX_RECORDING_SECONDS as f64 * CHUNKS_PER_SEC) as usize;
 
@@ -27,11 +25,10 @@ pub struct SttService {
 
 impl SttService {
     pub fn new(config: Config) -> Self {
-        let stt = config.stt.clone();
         let model_dir = config.stt_model_dir();
         Self {
             config,
-            engine: Some(ParakeetEngine::new(model_dir, stt.quantization.clone())),
+            engine: Some(ParakeetEngine::new(model_dir)),
             vad: None,
             last_activity: Arc::new(Mutex::new(Instant::now())),
         }
@@ -74,6 +71,8 @@ impl SttService {
         let mut recorded: Vec<Vec<f32>> = Vec::new();
         let mut is_recording = false;
         let mut silence_counter = 0usize;
+        let max_silence_chunks = (self.config.stt.silence_timeout_sec as f64 * CHUNKS_PER_SEC)
+            .ceil() as usize;
 
         let mut poll_items = [rep_sock.as_poll_item(zmq::POLLIN)];
         loop {
@@ -114,6 +113,7 @@ impl SttService {
                                     &mut recorded,
                                     &mut is_recording,
                                     &mut silence_counter,
+                                    max_silence_chunks,
                                     &pub_sock,
                                     &job_tx,
                                 );
@@ -138,6 +138,7 @@ impl SttService {
         recorded: &mut Vec<Vec<f32>>,
         is_recording: &mut bool,
         silence_counter: &mut usize,
+        max_silence_chunks: usize,
         pub_sock: &zmq::Socket,
         job_tx: &mpsc::Sender<Vec<f32>>,
     ) {
@@ -170,7 +171,7 @@ impl SttService {
             } else {
                 *silence_counter = 0;
             }
-            if *silence_counter > MAX_SILENCE_CHUNKS || recorded.len() > MAX_RECORDING_CHUNKS {
+            if *silence_counter > max_silence_chunks || recorded.len() > MAX_RECORDING_CHUNKS {
                 eprintln!("[STT] Processing...");
                 let full = recorded.concat();
                 recorded.clear();
@@ -203,6 +204,7 @@ impl SttService {
             Some("get_state") => json!({
                 "mode": mode,
                 "vad_threshold": self.config.stt.vad_threshold,
+                "silence_timeout_sec": self.config.stt.silence_timeout_sec,
                 "sample_rate": SAMPLE_RATE,
                 "model": self.config.stt.model,
             }),

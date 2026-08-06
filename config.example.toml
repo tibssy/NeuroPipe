@@ -12,6 +12,7 @@ mode = "IDLE"
 model = "nemo-parakeet-tdt-0.6b-v3"
 vad_threshold = 0.5
 digital_gain = 3.0
+silence_timeout_sec = 1.0
 model_idle_timeout_sec = 60
 
 [tts.defaults]

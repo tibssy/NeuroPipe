@@ -24,6 +24,7 @@ mode = "IDLE"
 model = "nemo-parakeet-tdt-0.6b-v3"
 vad_threshold = 0.5
 digital_gain = 3.0
+silence_timeout_sec = 1.0
 model_idle_timeout_sec = 60
 
 [tts.defaults]
@@ -231,6 +232,10 @@ pub fn validate_document(cfg: &TomlValue) -> Result<(), String> {
     let gain = require_float(stt, "digital_gain", "root.stt")?;
     if gain <= 0.0 {
         return Err("root.stt.digital_gain must be > 0".to_string());
+    }
+    let silence_timeout = require_float(stt, "silence_timeout_sec", "root.stt")?;
+    if silence_timeout <= 0.0 {
+        return Err("root.stt.silence_timeout_sec must be > 0".to_string());
     }
     let stt_idle = require_int(stt, "model_idle_timeout_sec", "root.stt")?;
     if stt_idle < 1 {

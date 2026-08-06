@@ -19,9 +19,9 @@ pub struct SttConfig {
     pub mode: String,
     pub model: String,
     pub model_dir: String,
-    pub quantization: String,
     pub vad_threshold: f32,
     pub digital_gain: f32,
+    pub silence_timeout_sec: f32,
     pub model_idle_timeout_sec: u64,
 }
 
@@ -36,9 +36,9 @@ impl Default for Config {
                 mode: "IDLE".to_string(),
                 model: "nemo-parakeet-tdt-0.6b-v3".to_string(),
                 model_dir: "~/.local/share/neuropipe/stt/parakeet-v3".to_string(),
-                quantization: "int8".to_string(),
                 vad_threshold: 0.5,
                 digital_gain: 3.0,
+                silence_timeout_sec: 1.0,
                 model_idle_timeout_sec: 60,
             },
         }
@@ -92,14 +92,14 @@ pub fn load() -> Config {
         if let Some(v) = stt.model_dir {
             base.stt.model_dir = v;
         }
-        if let Some(v) = stt.quantization {
-            base.stt.quantization = v;
-        }
         if let Some(v) = stt.vad_threshold {
             base.stt.vad_threshold = v;
         }
         if let Some(v) = stt.digital_gain {
             base.stt.digital_gain = v;
+        }
+        if let Some(v) = stt.silence_timeout_sec {
+            base.stt.silence_timeout_sec = v;
         }
         if let Some(v) = stt.model_idle_timeout_sec {
             base.stt.model_idle_timeout_sec = v;
@@ -119,9 +119,9 @@ struct UserSttConfig {
     mode: Option<String>,
     model: Option<String>,
     model_dir: Option<String>,
-    quantization: Option<String>,
     vad_threshold: Option<f32>,
     digital_gain: Option<f32>,
+    silence_timeout_sec: Option<f32>,
     model_idle_timeout_sec: Option<u64>,
 }
 

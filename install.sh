@@ -510,6 +510,32 @@ handle_kokoro_models() {
   printf "\e[32mKokoro models downloaded to %s\e[0m\n" "$models_dir"
 }
 
+download_stt_models() {
+  local model_dir="$HOME/.local/share/neuropipe/stt/parakeet-v3"
+  local vad_dir="$HOME/.local/share/neuropipe/stt"
+  local base_url="https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main"
+  local vad_url="https://huggingface.co/onnx-community/silero-vad/resolve/main/onnx/model.onnx"
+
+  if [[ -f "$model_dir/config.json" &&
+        -f "$model_dir/vocab.txt" &&
+        -f "$model_dir/encoder-model.int8.onnx" &&
+        -f "$model_dir/decoder_joint-model.int8.onnx" &&
+        -f "$vad_dir/silero_vad.onnx" ]]; then
+    printf "\n\e[32mSTT models already present in %s\e[0m\n" "$model_dir"
+    return 0
+  fi
+
+  printf "\n\e[34mDownloading Parakeet TDT v3 int8 STT model...\e[0m\n"
+  mkdir -p "$model_dir" "$vad_dir"
+  curl -fL --progress-bar "$base_url/config.json" -o "$model_dir/config.json"
+  curl -fL --progress-bar "$base_url/vocab.txt" -o "$model_dir/vocab.txt"
+  curl -fL --progress-bar "$base_url/encoder-model.int8.onnx" -o "$model_dir/encoder-model.int8.onnx"
+  curl -fL --progress-bar "$base_url/decoder_joint-model.int8.onnx" -o "$model_dir/decoder_joint-model.int8.onnx"
+  printf "\n\e[34mDownloading Silero VAD model...\e[0m\n"
+  curl -fL --progress-bar "$vad_url" -o "$vad_dir/silero_vad.onnx"
+  printf "\e[32mSTT models downloaded to %s\e[0m\n" "$model_dir"
+}
+
 prompt_install_approval() {
   local artifacts_label="$1"
   printf "\n\e[36m%s are ready.\e[0m\n" "$artifacts_label"
@@ -692,6 +718,10 @@ run_build_flow() {
   esac
   install_cli_binary_from_source
 
+  if [[ "$selection" == "2" || "$selection" == "4" ]]; then
+    download_stt_models
+  fi
+
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
     install_tool_plugins
     pull_assistant_embedding_model
@@ -767,6 +797,10 @@ run_prebuilt_flow() {
       ;;
   esac
   install_cli_binary
+
+  if [[ "$selection" == "2" || "$selection" == "4" ]]; then
+    download_stt_models
+  fi
 
   if [[ "$selection" == "3" || "$selection" == "4" ]]; then
     install_tool_plugins

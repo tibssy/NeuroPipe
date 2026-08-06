@@ -16,7 +16,7 @@ fn main() -> Result<()> {
         let wav = raw_args.get(pos + 1).ok_or_else(|| anyhow::anyhow!("--transcribe needs a wav path"))?;
         let cfg = config::load();
         let model_dir = cfg.stt_model_dir();
-        let mut engine = engines::parakeet::ParakeetEngine::new(&model_dir, cfg.stt.quantization.clone());
+        let mut engine = engines::parakeet::ParakeetEngine::new(&model_dir);
         engine.load()?;
         let samples = read_wav_f32(wav)?;
         let text = engine.transcribe(&samples)?;

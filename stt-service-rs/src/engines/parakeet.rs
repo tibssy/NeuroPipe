@@ -35,15 +35,13 @@ pub struct Parakeet {
 
 pub struct ParakeetEngine {
     model_dir: std::path::PathBuf,
-    quantization: String,
     inner: Option<Parakeet>,
 }
 
 impl ParakeetEngine {
-    pub fn new(model_dir: impl AsRef<Path>, quantization: impl Into<String>) -> Self {
+    pub fn new(model_dir: impl AsRef<Path>) -> Self {
         Self {
             model_dir: model_dir.as_ref().to_path_buf(),
-            quantization: quantization.into(),
             inner: None,
         }
     }
@@ -52,7 +50,7 @@ impl ParakeetEngine {
 impl SttEngine for ParakeetEngine {
     fn load(&mut self) -> Result<()> {
         if self.inner.is_none() {
-            self.inner = Some(Parakeet::load(&self.model_dir, &self.quantization)?);
+            self.inner = Some(Parakeet::load(&self.model_dir)?);
         }
         Ok(())
     }
@@ -72,10 +70,9 @@ impl SttEngine for ParakeetEngine {
 }
 
 impl Parakeet {
-    fn load(model_dir: &Path, quantization: &str) -> Result<Self> {
-        let suffix = if quantization == "int8" { ".int8" } else { "" };
-        let encoder_path = model_dir.join(format!("encoder-model{suffix}.onnx"));
-        let decoder_path = model_dir.join(format!("decoder_joint-model{suffix}.onnx"));
+    fn load(model_dir: &Path) -> Result<Self> {
+        let encoder_path = model_dir.join("encoder-model.int8.onnx");
+        let decoder_path = model_dir.join("decoder_joint-model.int8.onnx");
         let vocab_path = model_dir.join("vocab.txt");
         let config_path = model_dir.join("config.json");
 
