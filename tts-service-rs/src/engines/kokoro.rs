@@ -11,6 +11,7 @@ use std::path::Path;
 
 const SAMPLE_RATE: u32 = 24_000;
 const MAX_PHONEME_LENGTH: usize = 510;
+const SENTENCE_TAIL_SAMPLES: usize = 2_400; // ~100 ms at 24 kHz natural gap
 
 // This is the Kokoro v1 vocabulary. It is intentionally kept in source so
 // the binary does not depend on the Python kokoro_onnx package at runtime.
@@ -185,6 +186,10 @@ impl Kokoro {
             audio.extend_from_slice(trim_silence(samples));
         }
 
+        // Restore a natural pause between sentences; the model output is trimmed
+        // tightly, which otherwise makes speech sound clipped and rushed.
+        audio.extend(std::iter::repeat(0.0).take(SENTENCE_TAIL_SAMPLES));
+
         Ok((audio, SAMPLE_RATE))
     }
 }
@@ -228,9 +233,58 @@ fn split_phonemes(phonemes: &str) -> Vec<String> {
 }
 
 fn normalize_phonemes(phonemes: &str) -> String {
-    // The pure-Rust espeak data uses the British diphthong spelling here,
-    // while kokoro_onnx's en-us backend emits the American spelling.
-    phonemes.replace("əʊ", "oʊ")
+    // The pure-Rust espeak port ships only the British en dictionary and its
+    // base phoneme table; it ignores the en-us voice definition (phoneme table
+    // and dictrules 3 6 weak-form reduction), which the legacy kokoro_onnx
+    // pipeline did apply. Patch the output to match real espeak-ng en-us.
+    relax_commas(
+        &reduce_weak_articles(phonemes)
+            .replace("əʊ", "oʊ")
+            .replace('ɒ', "ɑ"),
+    )
+}
+
+/// The Kokoro model renders a comma token as a long (~300ms) terminal-sounding
+/// pause. A comma in running speech is a subtle break, so feed the model the
+/// same token stream as the comma-free text: turn the comma into an ordinary
+/// word boundary.
+fn relax_commas(phonemes: &str) -> String {
+    phonemes
+        .replace(',', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Real espeak-ng reduces the articles "a"/"an" to the weak vowel ɐ in running
+/// text; the Rust port always emits the strong form (`ˈeɪ` / literal `an`).
+/// Rewrite those standalone tokens while keeping any stress marks and trailing
+/// punctuation attached.
+fn reduce_weak_articles(phonemes: &str) -> String {
+    phonemes
+        .split_whitespace()
+        .map(|token| {
+            let core = token.trim_start_matches(['ˈ', 'ˌ']);
+            let mut boundary = core.len();
+            while let Some(prev) = core[..boundary].chars().next_back() {
+                if matches!(
+                    prev,
+                    '.' | ',' | '!' | '?' | ';' | ':' | '"' | '\'' | ')' | ']' | '}' | '”' | '»'
+                ) {
+                    boundary -= prev.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let (word, trailing) = core.split_at(boundary);
+            match word {
+                "eɪ" => format!("ɐ{trailing}"),
+                "an" => format!("ɐn{trailing}"),
+                _ => token.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn trim_silence(samples: &[f32]) -> &[f32] {
@@ -293,6 +347,44 @@ mod tests {
     #[test]
     fn normalizes_us_diphthong() {
         assert_eq!(normalize_phonemes("həlˈəʊ"), "həlˈoʊ");
+    }
+
+    #[test]
+    fn reduces_article_a_to_weak_form() {
+        assert_eq!(normalize_phonemes("ðɪs ɪz ˈeɪ tˈɛst"), "ðɪs ɪz ɐ tˈɛst");
+        assert_eq!(
+            normalize_phonemes("ˈeɪ kˈæt sˈæt ˌɒn ˈeɪ mˈæt"),
+            "ɐ kˈæt sˈæt ˌɑn ɐ mˈæt"
+        );
+    }
+
+    #[test]
+    fn keeps_stress_and_punctuation_when_reducing_articles() {
+        assert_eq!(
+            normalize_phonemes("hiː sˈɛd, ˈeɪ ænd ðˈɛn lˈɛft"),
+            "hiː sˈɛd ɐ ænd ðˈɛn lˈɛft"
+        );
+        assert_eq!(normalize_phonemes("ˈeɪ, ˈan, ðˈə"), "ɐ ɐn ðˈə");
+    }
+
+    #[test]
+    fn relaxes_comma_prosody_to_word_boundaries() {
+        assert_eq!(normalize_phonemes("həlˈəʊ, wˈɜːld"), "həlˈoʊ wˈɜːld");
+        assert_eq!(
+            normalize_phonemes("həlˈoʊ, wˈɜːld. ɐ kˈæt, sˈæt"),
+            "həlˈoʊ wˈɜːld. ɐ kˈæt sˈæt"
+        );
+    }
+
+    #[test]
+    fn reduces_an_from_literal_letters() {
+        assert_eq!(normalize_phonemes("an ˈæpəl ɪz ɡˈʊd"), "ɐn ˈæpəl ɪz ɡˈʊd");
+    }
+
+    #[test]
+    fn maps_british_lot_vowel_to_american() {
+        assert_eq!(normalize_phonemes("dˈɒktə"), "dˈɑktə");
+        assert_eq!(normalize_phonemes("fˈɒks"), "fˈɑks");
     }
 
     #[test]

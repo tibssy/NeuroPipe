@@ -1,4 +1,4 @@
-use super::{Quality, TtsEngine};
+use super::{split_sentences, Quality, TtsEngine};
 use anyhow::{anyhow, Context, Result};
 use ort::session::Session;
 use ort::value::{DynTensor, Tensor};
@@ -566,17 +566,36 @@ fn copy_prefix<T: Clone>(
 }
 
 fn split_text(tokenizer: &Tokenizer, text: &str) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        let candidate = if current.is_empty() {
-            word.to_string()
+    // Mirror the legacy Python `_split_into_best_sentences`: split on sentence
+    // boundaries, re-split oversized segments on softer punctuation, then merge
+    // adjacent segments back up to the token cap so prosody is preserved.
+    let primary = split_sentences(text);
+
+    let mut refined: Vec<String> = Vec::new();
+    for segment in &primary {
+        if tokenizer.encode(segment).len() <= MAX_TOKEN_PER_CHUNK {
+            refined.push(segment.clone());
+            continue;
+        }
+        let sub = split_on_punctuation(segment, &[',', ';', ':']);
+        if sub.len() > 1 {
+            refined.extend(sub);
         } else {
-            format!("{current} {word}")
-        };
-        if tokenizer.encode(&candidate).len() > MAX_TOKEN_PER_CHUNK && !current.is_empty() {
+            refined.push(segment.clone());
+        }
+    }
+
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for segment in refined {
+        if current.is_empty() {
+            current = segment;
+            continue;
+        }
+        let candidate = format!("{current} {segment}");
+        if tokenizer.encode(&candidate).len() > MAX_TOKEN_PER_CHUNK {
             chunks.push(current);
-            current = word.to_string();
+            current = segment;
         } else {
             current = candidate;
         }
@@ -589,6 +608,26 @@ fn split_text(tokenizer: &Tokenizer, text: &str) -> Vec<String> {
     } else {
         chunks
     }
+}
+
+fn split_on_punctuation(text: &str, terminators: &[char]) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    for (index, character) in text.char_indices() {
+        if terminators.contains(&character) {
+            let end = index + character.len_utf8();
+            let segment = text[start..end].trim();
+            if !segment.is_empty() {
+                segments.push(segment.to_string());
+            }
+            start = end;
+        }
+    }
+    let remainder = text[start..].trim();
+    if !remainder.is_empty() {
+        segments.push(remainder.to_string());
+    }
+    segments
 }
 
 struct Tokenizer {
@@ -661,4 +700,25 @@ fn change_speed(audio: &[f32], speed: f32) -> Vec<f32> {
             audio[left] + (audio[right] - audio[left]) * (position - left as f32)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_on_punctuation;
+
+    #[test]
+    fn splits_on_fallback_punctuation() {
+        assert_eq!(
+            split_on_punctuation("one, two; three: four", &[',', ';', ':']),
+            vec!["one,", "two;", "three:", "four"]
+        );
+    }
+
+    #[test]
+    fn keeps_text_without_terminators_intact() {
+        assert_eq!(
+            split_on_punctuation("just some words", &[',', ';', ':']),
+            vec!["just some words"]
+        );
+    }
 }
