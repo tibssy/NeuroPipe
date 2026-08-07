@@ -515,12 +515,14 @@ download_stt_models() {
   local vad_dir="$HOME/.local/share/neuropipe/stt"
   local base_url="https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main"
   local vad_url="https://huggingface.co/onnx-community/silero-vad/resolve/main/onnx/model.onnx"
+  local smart_turn_url="https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx"
 
   if [[ -f "$model_dir/config.json" &&
         -f "$model_dir/vocab.txt" &&
         -f "$model_dir/encoder-model.int8.onnx" &&
         -f "$model_dir/decoder_joint-model.int8.onnx" &&
-        -f "$vad_dir/silero_vad.onnx" ]]; then
+        -f "$vad_dir/silero_vad.onnx" &&
+        -f "$vad_dir/smart_turn_v3.2_cpu.onnx" ]]; then
     printf "\n\e[32mSTT models already present in %s\e[0m\n" "$model_dir"
     return 0
   fi
@@ -533,6 +535,8 @@ download_stt_models() {
   curl -fL --progress-bar "$base_url/decoder_joint-model.int8.onnx" -o "$model_dir/decoder_joint-model.int8.onnx"
   printf "\n\e[34mDownloading Silero VAD model...\e[0m\n"
   curl -fL --progress-bar "$vad_url" -o "$vad_dir/silero_vad.onnx"
+  printf "\n\e[34mDownloading Smart Turn v3.2 model (BSD-2-Clause, pipecat-ai)...\e[0m\n"
+  curl -fL --progress-bar "$smart_turn_url" -o "$vad_dir/smart_turn_v3.2_cpu.onnx"
   printf "\e[32mSTT models downloaded to %s\e[0m\n" "$model_dir"
 }
 

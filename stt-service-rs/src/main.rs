@@ -99,6 +99,7 @@ fn main() -> Result<()> {
                         if silence_ms >= 250 && silence_ms - last_scored_ms >= 400 {
                             let ctx = engines::endpoint::TurnContext {
                                 tail: tail.iter().copied().collect(),
+                                recording: tail.iter().copied().collect(),
                                 silence_ms,
                                 utterance_ms: 0,
                                 last_vad: p,
@@ -130,6 +131,16 @@ fn main() -> Result<()> {
         println!(
             "frames={frames} peak_rms={peak_rms:.4} non_silent={non_silent} best_vad={best:.4}"
         );
+        return Ok(());
+    }
+
+    if let Some(pos) = raw_args.iter().position(|a| a == "--smart-turn-wav") {
+        let wav = raw_args.get(pos + 1).ok_or_else(|| anyhow::anyhow!("--smart-turn-wav needs a wav path"))?;
+        let cfg = config::load();
+        let mut engine = engines::smart_turn::SmartTurnEngine::new(cfg.smart_turn_model_path())?;
+        let samples = read_wav_f32(wav)?;
+        let prob = engine.predict(&samples)?;
+        println!("{prob:.6}");
         return Ok(());
     }
 

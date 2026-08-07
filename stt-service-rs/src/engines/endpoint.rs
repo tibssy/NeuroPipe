@@ -18,6 +18,9 @@ const TERMINAL_SLOPE_HZ_S: f32 = -20.0;
 pub struct TurnContext {
     /// Recent audio (last ~1.8 s) including trailing speech + silence, 16 kHz.
     pub tail: Vec<f32>,
+    /// Full recorded turn so far (pre-roll + speech + trailing silence), 16 kHz.
+    /// Used by the smart-turn classifier; the heuristic scorer keys on `tail`.
+    pub recording: Vec<f32>,
     /// Duration of the current silence run in milliseconds.
     pub silence_ms: u64,
     /// Total recorded audio so far in milliseconds.
@@ -186,6 +189,7 @@ mod tests {
 
     fn ctx(tail: Vec<f32>, silence_ms: u64, utterance_ms: u64) -> TurnContext {
         TurnContext {
+            recording: tail.clone(),
             tail,
             silence_ms,
             utterance_ms,

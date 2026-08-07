@@ -26,6 +26,12 @@ env/
 *.log
 temp_*
 
+# Golden smart-turn test fixtures (committed): reference mels + fixtures.
+!stt-service-rs/assets/smart_turn_fixture_tone.wav
+!stt-service-rs/assets/smart_turn_fixture_speech.wav
+!stt-service-rs/assets/smart_turn_fixture_tone_mel.bin
+!stt-service-rs/assets/smart_turn_fixture_speech_mel.bin
+
 # --- Unix Sockets ---
 *.sock
 

@@ -164,6 +164,8 @@ Two engines available: `kokoro` (default) and `pocket-tts`. Models auto-download
 
 Pocket-tts voice embeddings are from [Kyutai](https://kyutai.org/), licensed under [CC-BY-4.0](tts-service-rs/VOICE_CREDITS.md).
 
+STT models are from [NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) (CC-BY-4.0), [Silero VAD](https://github.com/snakers4/silero-vad) (MIT), and [Pipecat Smart Turn](https://github.com/pipecat-ai/smart-turn) (BSD-2-Clause); see [stt-service-rs/MODEL_CREDITS.md](stt-service-rs/MODEL_CREDITS.md).
+
 ### Assistant (STT + Ollama + TTS)
 
 Requires [Ollama](https://ollama.com) installed and running with a model pulled.

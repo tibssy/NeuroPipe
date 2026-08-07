@@ -24,4 +24,10 @@ mkdir -p "$VAD_DIR"
 curl -fL --progress-bar \
   "https://huggingface.co/onnx-community/silero-vad/resolve/main/onnx/model.onnx" \
   -o "$VAD_DIR/silero_vad.onnx"
+echo ""
+echo "Downloading Smart Turn v3.2 model (BSD-2-Clause, pipecat-ai) -> $VAD_DIR"
+# Turn-end detection classifier; stored alongside the VAD model.
+curl -fL --progress-bar \
+  "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx" \
+  -o "$VAD_DIR/smart_turn_v3.2_cpu.onnx"
 echo "All done."

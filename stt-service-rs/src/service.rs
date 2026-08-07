@@ -1,6 +1,7 @@
 use crate::audio::{MicInput, WINDOW_SIZE};
 use crate::config::Config;
 use crate::engines::endpoint::{HeuristicTurnEnd, TurnContext};
+use crate::engines::smart_turn::SmartTurnEngine;
 use crate::engines::{parakeet::ParakeetEngine, SttEngine, TurnEndDetector};
 use crate::vad::Vad;
 use anyhow::Result;
@@ -89,6 +90,11 @@ impl Recording {
         self.recorded.concat()
     }
 
+    /// Concatenated recording so far, without consuming the buffer.
+    fn recording_samples(&self) -> Vec<f32> {
+        self.recorded.concat()
+    }
+
     fn reset(&mut self) {
         self.pre_speech.clear();
         self.recorded.clear();
@@ -110,11 +116,12 @@ pub struct SttService {
 impl SttService {
     pub fn new(config: Config) -> Self {
         let model_dir = config.stt_model_dir();
+        let endpoint = build_turn_end_detector(&config);
         Self {
             config,
             engine: Some(ParakeetEngine::new(model_dir)),
             vad: None,
-            endpoint: Some(Box::new(HeuristicTurnEnd::new())),
+            endpoint: Some(endpoint),
             last_activity: Arc::new(Mutex::new(Instant::now())),
         }
     }
@@ -265,6 +272,7 @@ impl SttService {
             {
                 let ctx = TurnContext {
                     tail: rec.tail_samples(),
+                    recording: rec.recording_samples(),
                     silence_ms: rec.silence_ms,
                     utterance_ms: rec.utterance_ms(),
                     last_vad: prob,
@@ -381,6 +389,36 @@ impl SttService {
 fn touch_activity(last_activity: &Arc<Mutex<Instant>>) {
     if let Ok(mut a) = last_activity.lock() {
         *a = Instant::now();
+    }
+}
+
+/// Select the turn-end detector from the config. `smart_turn` loads the ONNX
+/// classifier; if it is unavailable a warning is printed once and the
+/// heuristic scorer is used instead.
+fn build_turn_end_detector(config: &Config) -> Box<dyn TurnEndDetector> {
+    match config.stt.turn_detector.as_str() {
+        "smart_turn" => {
+            let path = config.smart_turn_model_path();
+            match SmartTurnEngine::new(&path) {
+                Ok(engine) => Box::new(
+                    engine.with_min_utterance_ms(config.stt.smart_turn_min_utterance_ms),
+                ),
+                Err(error) => {
+                    eprintln!(
+                        "[STT] warning: smart-turn model unavailable ({}); using heuristic turn-end",
+                        error
+                    );
+                    Box::new(HeuristicTurnEnd::new())
+                }
+            }
+        }
+        "heuristic" => Box::new(HeuristicTurnEnd::new()),
+        other => {
+            eprintln!(
+                "[STT] warning: unknown turn_detector '{other}'; using heuristic turn-end"
+            );
+            Box::new(HeuristicTurnEnd::new())
+        }
     }
 }
 
@@ -549,9 +587,16 @@ mod tests {
         SttService::new(config)
     }
 
+    /// Config pinned to the heuristic detector for the heuristic behavior tests.
+    fn heuristic_config() -> Config {
+        let mut config = Config::default();
+        config.stt.turn_detector = "heuristic".into();
+        config
+    }
+
     #[test]
     fn endpoint_holds_below_hold_window() {
-        let mut svc = test_service(Config::default());
+        let mut svc = test_service(heuristic_config());
         let mut rec = Recording::new();
         rec.start();
         rec.push(&tail_glide(440.0, 160.0));
@@ -561,7 +606,7 @@ mod tests {
 
     #[test]
     fn endpoint_finalizes_at_hard_ceiling() {
-        let mut svc = test_service(Config::default());
+        let mut svc = test_service(heuristic_config());
         let mut rec = Recording::new();
         rec.start();
         rec.push(&tail_glide(440.0, 220.0));
@@ -571,7 +616,7 @@ mod tests {
 
     #[test]
     fn endpoint_keeps_recording_on_flat_contour() {
-        let mut svc = test_service(Config::default());
+        let mut svc = test_service(heuristic_config());
         let mut rec = Recording::new();
         rec.start();
         rec.push(&tail_glide(220.0, 220.0)); // flat => continuation
@@ -581,7 +626,7 @@ mod tests {
 
     #[test]
     fn endpoint_finalizes_early_on_terminal_contour() {
-        let mut svc = test_service(Config::default());
+        let mut svc = test_service(heuristic_config());
         let mut rec = Recording::new();
         rec.start();
         rec.push(&tail_glide(440.0, 160.0)); // falling => terminal
@@ -593,7 +638,7 @@ mod tests {
     fn endpoint_keeps_recording_on_flat_contour_at_long_pause() {
         // Regression: "…a bit more about … apple" truncated at ~1.66s. A flat
         // mid-thought contour must not finalize even after a long pause.
-        let mut svc = test_service(Config::default());
+        let mut svc = test_service(heuristic_config());
         let mut rec = Recording::new();
         rec.start();
         rec.push(&tail_glide(220.0, 220.0)); // flat => continuation
@@ -605,7 +650,7 @@ mod tests {
     fn endpoint_keeps_recording_on_unvoiced_tail_at_long_pause() {
         // Regression: trailing speech fell out of the tail window, leaving
         // only silence. The unvoiced tail must not read as terminal.
-        let mut svc = test_service(Config::default());
+        let mut svc = test_service(heuristic_config());
         let mut rec = Recording::new();
         rec.start();
         rec.push(&vec![0.0; WINDOW_SIZE]);
@@ -615,7 +660,7 @@ mod tests {
 
     #[test]
     fn endpoint_respects_score_cadence() {
-        let mut svc = test_service(Config::default());
+        let mut svc = test_service(heuristic_config());
         let mut rec = Recording::new();
         rec.start();
         rec.push(&tail_glide(440.0, 160.0));
@@ -640,6 +685,9 @@ mod tests {
             turn_end_threshold: 0.5,
             turn_score_cadence_ms: 400,
             turn_hard_ceiling_ms: 3500,
+            turn_detector: "heuristic".into(),
+            smart_turn_model_path: "smart_turn_v3.2_cpu.onnx".into(),
+            smart_turn_min_utterance_ms: 1500,
         };
         let config = crate::config::Config {
             ipc: crate::config::IpcConfig {

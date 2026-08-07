@@ -1,5 +1,6 @@
 pub mod endpoint;
 pub mod parakeet;
+pub mod smart_turn;
 
 use anyhow::Result;
 

@@ -33,6 +33,14 @@ pub struct SttConfig {
     pub turn_score_cadence_ms: u64,
     /// Absolute silence ceiling; the turn always ends at this point.
     pub turn_hard_ceiling_ms: u64,
+    /// Turn-end detector backend: "smart_turn" (ONNX classifier) or
+    /// "heuristic" (prosodic scorer). Defaults to "smart_turn".
+    pub turn_detector: String,
+    /// Path to the smart-turn ONNX model, stored alongside the VAD model.
+    pub smart_turn_model_path: String,
+    /// Shortest utterance the smart-turn model considers a complete turn;
+    /// shorter recordings keep recording instead of scoring.
+    pub smart_turn_min_utterance_ms: u64,
 }
 
 impl Default for Config {
@@ -55,6 +63,9 @@ impl Default for Config {
                 turn_end_threshold: 0.5,
                 turn_score_cadence_ms: 400,
                 turn_hard_ceiling_ms: 3500,
+                turn_detector: "smart_turn".to_string(),
+                smart_turn_model_path: "~/.local/share/neuropipe/stt/smart_turn_v3.2_cpu.onnx".to_string(),
+                smart_turn_min_utterance_ms: 1500,
             },
         }
     }
@@ -83,6 +94,11 @@ impl Config {
         dir.parent()
             .map(|p| p.join("silero_vad.onnx"))
             .unwrap_or_else(|| dir.join("silero_vad.onnx"))
+    }
+
+    /// Path to the smart-turn ONNX model (defaults beside the VAD model).
+    pub fn smart_turn_model_path(&self) -> PathBuf {
+        PathBuf::from(expand_home(&self.stt.smart_turn_model_path))
     }
 }
 
@@ -137,6 +153,15 @@ pub fn load() -> Config {
         if let Some(v) = stt.turn_hard_ceiling_ms {
             base.stt.turn_hard_ceiling_ms = v;
         }
+        if let Some(v) = stt.turn_detector {
+            base.stt.turn_detector = v;
+        }
+        if let Some(v) = stt.smart_turn_model_path {
+            base.stt.smart_turn_model_path = v;
+        }
+        if let Some(v) = stt.smart_turn_min_utterance_ms {
+            base.stt.smart_turn_min_utterance_ms = v;
+        }
     }
     base
 }
@@ -161,6 +186,9 @@ struct UserSttConfig {
     turn_end_threshold: Option<f32>,
     turn_score_cadence_ms: Option<u64>,
     turn_hard_ceiling_ms: Option<u64>,
+    turn_detector: Option<String>,
+    smart_turn_model_path: Option<String>,
+    smart_turn_min_utterance_ms: Option<u64>,
 }
 
 fn config_path() -> PathBuf {
