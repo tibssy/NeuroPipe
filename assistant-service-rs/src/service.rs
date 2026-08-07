@@ -34,6 +34,7 @@ struct TtsEventData {
     started_sentences: Vec<String>,
     completed_sentences: usize,
     interrupted: bool,
+    active_sentences: usize,
 }
 
 pub struct TtsEvents {
@@ -48,6 +49,7 @@ impl TtsEvents {
                 started_sentences: Vec::new(),
                 completed_sentences: 0,
                 interrupted: false,
+                active_sentences: 0,
             }),
             changed: Condvar::new(),
         }
@@ -58,6 +60,7 @@ impl TtsEvents {
         data.started_sentences.clear();
         data.completed_sentences = 0;
         data.interrupted = false;
+        data.active_sentences = 0;
     }
 
     fn record(&self, message: &Value) {
@@ -68,11 +71,16 @@ impl TtsEvents {
                 if let Some(sentence) = message.get("sentence").and_then(Value::as_str) {
                     data.started_sentences.push(sentence.to_string());
                 }
+                data.active_sentences += 1;
             }
-            "sentence_done" => data.completed_sentences += 1,
+            "sentence_done" => {
+                data.completed_sentences += 1;
+                data.active_sentences = data.active_sentences.saturating_sub(1);
+            }
             "interrupted" => {
                 data.completed_sentences += 1;
                 data.interrupted = true;
+                data.active_sentences = data.active_sentences.saturating_sub(1);
             }
             _ => return,
         }
@@ -81,6 +89,10 @@ impl TtsEvents {
 
     fn started_sentences(&self) -> Vec<String> {
         self.data.lock().unwrap().started_sentences.clone()
+    }
+
+    pub fn is_speaking(&self) -> bool {
+        self.data.lock().unwrap().active_sentences > 0
     }
 
     fn wait_for_completion(&self, expected: usize, cancel: &AtomicBool, mode: &Mutex<String>) {
@@ -746,9 +758,9 @@ impl Shared {
         self.spoken_buffer.lock().unwrap().clear();
 
         let mode = self.mode.lock().unwrap().clone();
+        self.tts_events.begin_response();
         if mode == "MODE1" {
             self.set_stt_mode("IDLE");
-            self.tts_events.begin_response();
         }
 
         self.ask_ollama(&text);
@@ -781,7 +793,7 @@ impl Shared {
     }
 
     pub fn interrupt(&self) -> String {
-        if !self.is_busy() {
+        if !self.is_busy() && !self.tts_events.is_speaking() {
             return String::new();
         }
         self.cancel.store(true, Ordering::SeqCst);

@@ -212,7 +212,9 @@ fn stt_loop(shared: &Arc<Shared>) {
                         // transcription arrives. MODE1 stays half-duplex.
                         {
                             let mode = shared.mode.lock().unwrap().clone();
-                            if mode == "MODE2" && shared.is_busy() {
+                            if mode == "MODE2"
+                                && (shared.is_busy() || shared.tts_events.is_speaking())
+                            {
                                 println!("\n[Interrupting — speech detected]");
                                 shared.interrupt();
                             }

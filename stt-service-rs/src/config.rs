@@ -20,6 +20,9 @@ pub struct SttConfig {
     pub model: String,
     pub model_dir: String,
     pub vad_threshold: f32,
+    /// Consecutive VAD-above-threshold frames required to start a recording
+    /// and emit `listening_start` (debounces transient noise).
+    pub vad_start_frames: u64,
     pub digital_gain: f32,
     pub silence_timeout_sec: f32,
     pub model_idle_timeout_sec: u64,
@@ -55,6 +58,7 @@ impl Default for Config {
                 model: "nemo-parakeet-tdt-0.6b-v3".to_string(),
                 model_dir: "~/.local/share/neuropipe/stt/parakeet-v3".to_string(),
                 vad_threshold: 0.5,
+                vad_start_frames: 5,
                 digital_gain: 3.0,
                 silence_timeout_sec: 1.0,
                 model_idle_timeout_sec: 60,
@@ -65,7 +69,7 @@ impl Default for Config {
                 turn_hard_ceiling_ms: 3500,
                 turn_detector: "smart_turn".to_string(),
                 smart_turn_model_path: "~/.local/share/neuropipe/stt/smart_turn_v3.2_cpu.onnx".to_string(),
-                smart_turn_min_utterance_ms: 1500,
+                smart_turn_min_utterance_ms: 400,
             },
         }
     }
@@ -129,6 +133,9 @@ pub fn load() -> Config {
         if let Some(v) = stt.vad_threshold {
             base.stt.vad_threshold = v;
         }
+        if let Some(v) = stt.vad_start_frames {
+            base.stt.vad_start_frames = v;
+        }
         if let Some(v) = stt.digital_gain {
             base.stt.digital_gain = v;
         }
@@ -178,6 +185,7 @@ struct UserSttConfig {
     model: Option<String>,
     model_dir: Option<String>,
     vad_threshold: Option<f32>,
+    vad_start_frames: Option<u64>,
     digital_gain: Option<f32>,
     silence_timeout_sec: Option<f32>,
     model_idle_timeout_sec: Option<u64>,

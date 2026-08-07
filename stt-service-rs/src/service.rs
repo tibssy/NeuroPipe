@@ -111,6 +111,7 @@ pub struct SttService {
     vad: Option<Vad>,
     endpoint: Option<Box<dyn TurnEndDetector>>,
     last_activity: Arc<Mutex<Instant>>,
+    vad_onset_frames: u64,
 }
 
 impl SttService {
@@ -123,6 +124,7 @@ impl SttService {
             vad: None,
             endpoint: Some(endpoint),
             last_activity: Arc::new(Mutex::new(Instant::now())),
+            vad_onset_frames: 0,
         }
     }
 
@@ -234,7 +236,12 @@ impl SttService {
 
         if !rec.is_recording {
             rec.buffer_pre(chunk);
-            if prob > threshold {
+            if should_start_recording(
+                prob,
+                threshold,
+                self.config.stt.vad_start_frames,
+                &mut self.vad_onset_frames,
+            ) {
                 rec.start();
                 eprintln!("[STT] VAD start");
                 let _ = pub_sock.send(
@@ -256,7 +263,32 @@ impl SttService {
             self.end_turn(rec, pub_sock, job_tx);
         }
     }
+}
 
+/// Debounced VAD onset: count consecutive above-threshold frames and only
+/// signal a start once `required_frames` are seen in a row (resets on any
+/// quiet frame). Filters single-frame noise spikes from triggering a barge-in.
+fn should_start_recording(
+    prob: f32,
+    threshold: f32,
+    required_frames: u64,
+    onset: &mut u64,
+) -> bool {
+    if prob > threshold {
+        *onset += 1;
+        if *onset >= required_frames {
+            *onset = 0;
+            true
+        } else {
+            false
+        }
+    } else {
+        *onset = 0;
+        false
+    }
+}
+
+impl SttService {
     /// Decide whether the current pause marks the end of the turn. When
     /// `turn_end_enabled`, a small detector scores the pause (after a hold
     /// window, re-scored on a cadence) and a hard ceiling always finalizes.
@@ -302,6 +334,7 @@ impl SttService {
         eprintln!("[STT] Processing...");
         let full = rec.take_recorded();
         rec.reset();
+        self.vad_onset_frames = 0;
         if let Some(v) = self.vad.as_mut() {
             v.reset();
         }
@@ -325,6 +358,7 @@ impl SttService {
             Some("get_state") => json!({
                 "mode": mode,
                 "vad_threshold": self.config.stt.vad_threshold,
+                "vad_start_frames": self.config.stt.vad_start_frames,
                 "silence_timeout_sec": self.config.stt.silence_timeout_sec,
                 "turn_end_enabled": self.config.stt.turn_end_enabled,
                 "sample_rate": SAMPLE_RATE,
@@ -338,6 +372,7 @@ impl SttService {
                     .to_string();
                 *mode = new_mode;
                 rec.reset();
+                self.vad_onset_frames = 0;
                 if *mode == "VAD" {
                     if let Some(v) = self.vad.as_mut() {
                         v.reset();
@@ -569,6 +604,32 @@ mod tests {
         assert_eq!(rec.last_scored_ms, 0);
     }
 
+    #[test]
+    fn vad_onset_needs_sustained_frames() {
+        let mut onset = 0u64;
+        // A single transient loud frame must not start a recording.
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        // A quiet frame resets the streak.
+        assert!(!should_start_recording(0.1, 0.5, 5, &mut onset));
+        assert_eq!(onset, 0);
+        // Sustained frames start only on the 5th consecutive one.
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        assert!(should_start_recording(0.9, 0.5, 5, &mut onset));
+        // Counter resets after firing.
+        assert_eq!(onset, 0);
+    }
+
+    #[test]
+    fn vad_onset_required_one_fires_immediately() {
+        let mut onset = 0u64;
+        assert!(should_start_recording(0.9, 0.5, 1, &mut onset));
+        assert_eq!(onset, 0);
+    }
+
     fn tail_glide(freq_from: f32, freq_to: f32) -> Vec<f32> {
         let sr = 16_000.0f32;
         let n = (0.6 * sr) as usize;
@@ -677,6 +738,7 @@ mod tests {
             model: "m".into(),
             model_dir: "d".into(),
             vad_threshold: 0.5,
+            vad_start_frames: 5,
             digital_gain: 1.0,
             silence_timeout_sec: 1.0,
             model_idle_timeout_sec: 60,
@@ -687,7 +749,7 @@ mod tests {
             turn_hard_ceiling_ms: 3500,
             turn_detector: "heuristic".into(),
             smart_turn_model_path: "smart_turn_v3.2_cpu.onnx".into(),
-            smart_turn_min_utterance_ms: 1500,
+            smart_turn_min_utterance_ms: 400,
         };
         let config = crate::config::Config {
             ipc: crate::config::IpcConfig {
