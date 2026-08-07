@@ -207,6 +207,16 @@ fn stt_loop(shared: &Arc<Shared>) {
                         print!(".");
                         use std::io::Write;
                         let _ = std::io::stdout().flush();
+                        // Instant barge-in: in MODE2, stop TTS the moment speech
+                        // onset is detected, rather than after the full
+                        // transcription arrives. MODE1 stays half-duplex.
+                        {
+                            let mode = shared.mode.lock().unwrap().clone();
+                            if mode == "MODE2" && shared.is_busy() {
+                                println!("\n[Interrupting — speech detected]");
+                                shared.interrupt();
+                            }
+                        }
                         let sh = Arc::clone(shared);
                         std::thread::spawn(move || sh.warm_tts());
                     }

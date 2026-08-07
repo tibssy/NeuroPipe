@@ -6,6 +6,8 @@ mod vad;
 
 use anyhow::{bail, Context, Result};
 use engines::SttEngine;
+use engines::TurnEndDetector;
+use std::collections::VecDeque;
 use std::env;
 use std::path::Path;
 
@@ -61,6 +63,13 @@ fn main() -> Result<()> {
         let mut non_silent = 0usize;
         let dump_path = std::env::var("NEUROPIPE_DUMP_MIC").ok();
         let mut dump: Vec<f32> = Vec::new();
+        // Turn-end score tracking, mirroring the service loop.
+        let mut endpoint = engines::endpoint::HeuristicTurnEnd::new();
+        let mut tail: VecDeque<f32> = VecDeque::new();
+        let mut silence_ms = 0u64;
+        let mut last_scored_ms = 0u64;
+        const CHUNK_MS: u64 = 512 * 1000 / 16_000;
+        const TAIL_SAMPLES: usize = 16_000 * 2;
         let start = std::time::Instant::now();
         while start.elapsed().as_secs() < seconds {
             match rx.try_recv() {
@@ -76,6 +85,29 @@ fn main() -> Result<()> {
                     }
                     let p = vad.predict(&chunk).unwrap_or(0.0);
                     best = best.max(p);
+                    for &s in &chunk {
+                        tail.push_back(s);
+                    }
+                    while tail.len() > TAIL_SAMPLES {
+                        tail.pop_front();
+                    }
+                    if p > cfg.stt.vad_threshold {
+                        silence_ms = 0;
+                        last_scored_ms = 0;
+                    } else {
+                        silence_ms += CHUNK_MS;
+                        if silence_ms >= 250 && silence_ms - last_scored_ms >= 400 {
+                            let ctx = engines::endpoint::TurnContext {
+                                tail: tail.iter().copied().collect(),
+                                silence_ms,
+                                utterance_ms: 0,
+                                last_vad: p,
+                            };
+                            let score = endpoint.score(&ctx);
+                            last_scored_ms = silence_ms;
+                            eprintln!("[dbg] turn score={score:.3} silence={silence_ms}ms");
+                        }
+                    }
                     if rms > 0.005 {
                         eprintln!("[dbg] frame={frames} len={} rms={rms:.4} vad={p:.4}", chunk.len());
                     }

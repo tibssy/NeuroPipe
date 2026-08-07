@@ -23,6 +23,16 @@ pub struct SttConfig {
     pub digital_gain: f32,
     pub silence_timeout_sec: f32,
     pub model_idle_timeout_sec: u64,
+    /// Enable smart turn-end detection (replaces the fixed silence timeout).
+    pub turn_end_enabled: bool,
+    /// Silence a speaker must hold before the turn-end detector is consulted.
+    pub turn_hold_ms: u64,
+    /// P(end-of-turn) above which the turn is finalized early.
+    pub turn_end_threshold: f32,
+    /// How often to re-score while the speaker keeps pausing.
+    pub turn_score_cadence_ms: u64,
+    /// Absolute silence ceiling; the turn always ends at this point.
+    pub turn_hard_ceiling_ms: u64,
 }
 
 impl Default for Config {
@@ -40,6 +50,11 @@ impl Default for Config {
                 digital_gain: 3.0,
                 silence_timeout_sec: 1.0,
                 model_idle_timeout_sec: 60,
+                turn_end_enabled: true,
+                turn_hold_ms: 250,
+                turn_end_threshold: 0.5,
+                turn_score_cadence_ms: 400,
+                turn_hard_ceiling_ms: 2500,
             },
         }
     }
@@ -104,6 +119,21 @@ pub fn load() -> Config {
         if let Some(v) = stt.model_idle_timeout_sec {
             base.stt.model_idle_timeout_sec = v;
         }
+        if let Some(v) = stt.turn_end_enabled {
+            base.stt.turn_end_enabled = v;
+        }
+        if let Some(v) = stt.turn_hold_ms {
+            base.stt.turn_hold_ms = v;
+        }
+        if let Some(v) = stt.turn_end_threshold {
+            base.stt.turn_end_threshold = v;
+        }
+        if let Some(v) = stt.turn_score_cadence_ms {
+            base.stt.turn_score_cadence_ms = v;
+        }
+        if let Some(v) = stt.turn_hard_ceiling_ms {
+            base.stt.turn_hard_ceiling_ms = v;
+        }
     }
     base
 }
@@ -123,6 +153,11 @@ struct UserSttConfig {
     digital_gain: Option<f32>,
     silence_timeout_sec: Option<f32>,
     model_idle_timeout_sec: Option<u64>,
+    turn_end_enabled: Option<bool>,
+    turn_hold_ms: Option<u64>,
+    turn_end_threshold: Option<f32>,
+    turn_score_cadence_ms: Option<u64>,
+    turn_hard_ceiling_ms: Option<u64>,
 }
 
 fn config_path() -> PathBuf {

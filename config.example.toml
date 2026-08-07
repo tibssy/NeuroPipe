@@ -14,6 +14,14 @@ vad_threshold = 0.5
 digital_gain = 3.0
 silence_timeout_sec = 1.0
 model_idle_timeout_sec = 60
+# Smart turn-end detection: a small detector scores pauses and ends the turn
+# as soon as the speaker is likely done, instead of a fixed silence timeout.
+# silence_timeout_sec above is kept as the fallback when turn_end_enabled=false.
+turn_end_enabled = true
+turn_hold_ms = 250
+turn_end_threshold = 0.5
+turn_score_cadence_ms = 400
+turn_hard_ceiling_ms = 2500
 
 [tts.defaults]
 engine = "kokoro"
