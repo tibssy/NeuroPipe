@@ -122,12 +122,18 @@ impl SttService {
     pub fn run(&mut self) -> Result<()> {
         let initial_mode = self.config.stt.mode.clone();
 
+        let fake_wav = std::env::var_os("FAKE_MIC");
         let (audio_tx, audio_rx) = mpsc::channel();
-        let _mic;
-        if let Some(wav) = std::env::var_os("FAKE_MIC") {
-            crate::audio::FakeMic::open(wav, audio_tx)?;
+        let use_real_mic = fake_wav.is_none();
+        let mut mic: Option<MicInput> = None;
+        if use_real_mic {
+            // Keep the mic hardware off while starting in IDLE; it is opened
+            // on the first mode switch away from IDLE.
+            if initial_mode != "IDLE" {
+                mic = Some(MicInput::open(audio_tx.clone())?);
+            }
         } else {
-            _mic = MicInput::open(audio_tx)?;
+            crate::audio::FakeMic::open(fake_wav.expect("FAKE_MIC"), audio_tx.clone())?;
         }
 
         let vad_path = self.config.vad_path();
@@ -162,8 +168,10 @@ impl SttService {
 
             if poll_items[0].is_readable() {
                 let message: Value = serde_json::from_slice(&rep_sock.recv_bytes(0)?)?;
+                let prev_mode = mode.clone();
                 let response =
                     self.handle_command(&message, &mut mode, &mut rec, &pub_sock, &job_tx);
+                sync_mic(&mut mic, &audio_tx, use_real_mic, &prev_mode, &mode);
                 rep_sock.send(response.to_string().as_bytes(), 0)?;
             }
 
@@ -373,6 +381,37 @@ impl SttService {
 fn touch_activity(last_activity: &Arc<Mutex<Instant>>) {
     if let Ok(mut a) = last_activity.lock() {
         *a = Instant::now();
+    }
+}
+
+/// Gate the microphone on the service mode: only capture while not in IDLE.
+/// Entering IDLE drops the stream (closing the ALSA device so the hardware is
+/// truly off); leaving IDLE reopens it. A dropped-then-reopened stream is
+/// reliable across devices, unlike `pause()` which silently no-ops on
+/// hardware without ALSA pause support. The fake mic (tests) has no hardware
+/// and is left running; open failures are logged but non-fatal.
+fn sync_mic(
+    mic: &mut Option<MicInput>,
+    audio_tx: &mpsc::Sender<Vec<f32>>,
+    use_real_mic: bool,
+    prev_mode: &str,
+    cur_mode: &str,
+) {
+    if prev_mode == cur_mode || !use_real_mic {
+        return;
+    }
+    if cur_mode == "IDLE" {
+        if mic.take().is_some() {
+            eprintln!("[STT] mic off (IDLE)");
+        }
+    } else if mic.is_none() {
+        match MicInput::open(audio_tx.clone()) {
+            Ok(m) => {
+                *mic = Some(m);
+                eprintln!("[STT] mic on ({cur_mode})");
+            }
+            Err(e) => eprintln!("[STT] warning: could not open mic: {e:#}"),
+        }
     }
 }
 
