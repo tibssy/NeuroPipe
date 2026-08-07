@@ -21,7 +21,7 @@ turn_end_enabled = true
 turn_hold_ms = 250
 turn_end_threshold = 0.5
 turn_score_cadence_ms = 400
-turn_hard_ceiling_ms = 2500
+turn_hard_ceiling_ms = 3500
 
 [tts.defaults]
 engine = "kokoro"

@@ -526,7 +526,7 @@ mod tests {
         let mut rec = Recording::new();
         rec.start();
         rec.push(&tail_glide(440.0, 220.0));
-        rec.silence_ms = 3000; // >= turn_hard_ceiling_ms (2500)
+        rec.silence_ms = 3600; // >= turn_hard_ceiling_ms (3500)
         assert!(svc.should_end_turn(&mut rec, 0.0));
     }
 
@@ -548,6 +548,30 @@ mod tests {
         rec.push(&tail_glide(440.0, 160.0)); // falling => terminal
         rec.silence_ms = 700;
         assert!(svc.should_end_turn(&mut rec, 0.0));
+    }
+
+    #[test]
+    fn endpoint_keeps_recording_on_flat_contour_at_long_pause() {
+        // Regression: "…a bit more about … apple" truncated at ~1.66s. A flat
+        // mid-thought contour must not finalize even after a long pause.
+        let mut svc = test_service(Config::default());
+        let mut rec = Recording::new();
+        rec.start();
+        rec.push(&tail_glide(220.0, 220.0)); // flat => continuation
+        rec.silence_ms = 1664; // the exact pause length that truncated before
+        assert!(!svc.should_end_turn(&mut rec, 0.0));
+    }
+
+    #[test]
+    fn endpoint_keeps_recording_on_unvoiced_tail_at_long_pause() {
+        // Regression: trailing speech fell out of the tail window, leaving
+        // only silence. The unvoiced tail must not read as terminal.
+        let mut svc = test_service(Config::default());
+        let mut rec = Recording::new();
+        rec.start();
+        rec.push(&vec![0.0; WINDOW_SIZE]);
+        rec.silence_ms = 1664;
+        assert!(!svc.should_end_turn(&mut rec, 0.0));
     }
 
     #[test]
@@ -576,7 +600,7 @@ mod tests {
             turn_hold_ms: 250,
             turn_end_threshold: 0.5,
             turn_score_cadence_ms: 400,
-            turn_hard_ceiling_ms: 2500,
+            turn_hard_ceiling_ms: 3500,
         };
         let config = crate::config::Config {
             ipc: crate::config::IpcConfig {

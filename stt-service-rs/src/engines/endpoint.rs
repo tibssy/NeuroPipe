@@ -8,6 +8,11 @@
 
 use crate::engines::TurnEndDetector;
 
+/// Below this (Hz/s) a final-pitch slope is treated as terminal. Real terminal
+/// falls run to hundreds of Hz/s; a slightly negative reading is F0-estimator
+/// jitter on a flat contour and must not gate a turn end.
+const TERMINAL_SLOPE_HZ_S: f32 = -20.0;
+
 /// Context handed to the detector on each scoring pass.
 #[derive(Debug, Clone)]
 pub struct TurnContext {
@@ -28,6 +33,10 @@ pub struct TurnContext {
 /// Terminal turns typically end with a falling pitch contour and a
 /// perceptible pause; mid-turn pauses tend to hold a flat/rising contour.
 /// The score combines final-pitch slope, pause length and utterance length.
+/// A falling contour is *required* to finalize a turn early: without one the
+/// score is capped below the end threshold so mid-thought pauses never
+/// truncate the utterance — only the hard ceiling (or a later falling
+/// contour) ends the turn.
 #[derive(Debug, Clone)]
 pub struct HeuristicTurnEnd {
     /// Weight for the terminal-pitch-slope contribution.
@@ -57,16 +66,27 @@ impl HeuristicTurnEnd {
 impl TurnEndDetector for HeuristicTurnEnd {
     fn score(&mut self, ctx: &TurnContext) -> f32 {
         // Pitch contribution in [0,1]: 1 when the voiced tail clearly falls.
+        // An unvoiced/absent tail yields 0: it carries no terminal evidence.
         let pitch = match final_pitch_slope(&ctx.tail) {
-            Some(slope) if slope < -0.0 => (-slope / 30.0).min(1.0),
+            Some(slope) if slope < TERMINAL_SLOPE_HZ_S => {
+                ((-slope - TERMINAL_SLOPE_HZ_S) / 30.0).min(1.0)
+            }
             Some(_) => 0.0,
-            None => 0.4, // unvoiced tail: fall back to a neutral cue
+            None => 0.0,
         };
         // Pause contribution: reaches 1 after ~1.2 s of silence.
         let pause = (ctx.silence_ms as f32 / 1200.0).min(1.0);
         // Length contribution: short utterances are rarely complete turns.
         let length = (ctx.utterance_ms as f32 / 3000.0).min(1.0);
-        self.pitch_weight * pitch + self.pause_weight * pause + self.length_weight * length
+        let mut score =
+            self.pitch_weight * pitch + self.pause_weight * pause + self.length_weight * length;
+        // Mid-thought pauses must never finalize the turn: without a falling
+        // contour, cap the score below the default end threshold (0.5) so only
+        // the hard ceiling ends the turn.
+        if pitch <= 0.0 {
+            score = score.min(self.pause_weight + self.length_weight);
+        }
+        score
     }
 
     fn reset(&mut self) {}
@@ -219,6 +239,45 @@ mod tests {
         assert!(
             score < 0.4,
             "micro-pause should not end the turn, got {score}"
+        );
+    }
+
+    #[test]
+    fn unvoiced_tail_never_scores_terminal() {
+        // Regression: "…about …" mid-thought pause. The trailing speech has
+        // fallen out of the 1.8s tail window, leaving mostly silence. The
+        // unvoiced tail must NOT read as a falling contour and push the score
+        // over the 0.5 threshold at ~1.6s.
+        let sr = 16_000;
+        let mut tail = vec![0.0f32; (1.8 * sr as f32) as usize]; // pure silence
+        let mut det = HeuristicTurnEnd::new();
+        let score = det.score(&ctx(tail, 1664, 4000));
+        assert!(
+            score < 0.5,
+            "unvoiced tail with a long pause should stay below threshold, got {score}"
+        );
+        tail = vec![0.0f32; 100]; // near-empty tail
+        det.reset();
+        let score = det.score(&ctx(tail, 1664, 4000));
+        assert!(
+            score < 0.5,
+            "near-empty tail should stay below threshold, got {score}"
+        );
+    }
+
+    #[test]
+    fn flat_tail_never_scores_terminal_at_long_pause() {
+        // Mid-thought pause on a flat contour: even after ~1.7s of silence the
+        // score must stay below the threshold — the trailing word must not be
+        // cut off.
+        let sr = 16_000;
+        let n = (0.6 * sr as f32) as usize;
+        let tail = tone(220.0, sr, n, 0.0);
+        let mut det = HeuristicTurnEnd::new();
+        let score = det.score(&ctx(tail, 1664, 4000));
+        assert!(
+            score < 0.5,
+            "flat contour at 1.66s pause should stay below threshold, got {score}"
         );
     }
 

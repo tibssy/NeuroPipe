@@ -54,7 +54,7 @@ impl Default for Config {
                 turn_hold_ms: 250,
                 turn_end_threshold: 0.5,
                 turn_score_cadence_ms: 400,
-                turn_hard_ceiling_ms: 2500,
+                turn_hard_ceiling_ms: 3500,
             },
         }
     }
@@ -63,7 +63,10 @@ impl Default for Config {
 fn expand_home(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest).to_string_lossy().into_owned();
+            return PathBuf::from(home)
+                .join(rest)
+                .to_string_lossy()
+                .into_owned();
         }
     }
     path.to_string()
