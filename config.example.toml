@@ -11,9 +11,29 @@ assistant_cmd = "ipc:///tmp/neuropipe_assistant_cmd.sock"
 mode = "IDLE"
 model = "nemo-parakeet-tdt-0.6b-v3"
 vad_threshold = 0.5
+# Consecutive VAD-above-threshold frames required to start a recording and emit
+# listening_start (debounces transient noise; 5 frames ≈ 160 ms).
+vad_start_frames = 5
 digital_gain = 3.0
 silence_timeout_sec = 1.0
 model_idle_timeout_sec = 60
+# Smart turn-end detection: a small detector scores pauses and ends the turn
+# as soon as the speaker is likely done, instead of a fixed silence timeout.
+# silence_timeout_sec above is kept as the fallback when turn_end_enabled=false.
+turn_end_enabled = true
+turn_hold_ms = 250
+turn_end_threshold = 0.5
+turn_score_cadence_ms = 400
+turn_hard_ceiling_ms = 3500
+# Turn-end detector backend: "smart_turn" (ONNX classifier, default) or
+# "heuristic" (prosodic scorer). If the smart-turn model is missing, the
+# service logs a warning once and falls back to "heuristic".
+turn_detector = "smart_turn"
+# Path to the smart-turn ONNX model (stored alongside the VAD model).
+smart_turn_model_path = "~/.local/share/neuropipe/stt/smart_turn_v3.2_cpu.onnx"
+# Shortest utterance (ms) the smart-turn model treats as a possible complete
+# turn; shorter recordings keep recording instead of being scored.
+smart_turn_min_utterance_ms = 400
 
 [tts.defaults]
 engine = "kokoro"

@@ -20,9 +20,30 @@ pub struct SttConfig {
     pub model: String,
     pub model_dir: String,
     pub vad_threshold: f32,
+    /// Consecutive VAD-above-threshold frames required to start a recording
+    /// and emit `listening_start` (debounces transient noise).
+    pub vad_start_frames: u64,
     pub digital_gain: f32,
     pub silence_timeout_sec: f32,
     pub model_idle_timeout_sec: u64,
+    /// Enable smart turn-end detection (replaces the fixed silence timeout).
+    pub turn_end_enabled: bool,
+    /// Silence a speaker must hold before the turn-end detector is consulted.
+    pub turn_hold_ms: u64,
+    /// P(end-of-turn) above which the turn is finalized early.
+    pub turn_end_threshold: f32,
+    /// How often to re-score while the speaker keeps pausing.
+    pub turn_score_cadence_ms: u64,
+    /// Absolute silence ceiling; the turn always ends at this point.
+    pub turn_hard_ceiling_ms: u64,
+    /// Turn-end detector backend: "smart_turn" (ONNX classifier) or
+    /// "heuristic" (prosodic scorer). Defaults to "smart_turn".
+    pub turn_detector: String,
+    /// Path to the smart-turn ONNX model, stored alongside the VAD model.
+    pub smart_turn_model_path: String,
+    /// Shortest utterance the smart-turn model considers a complete turn;
+    /// shorter recordings keep recording instead of scoring.
+    pub smart_turn_min_utterance_ms: u64,
 }
 
 impl Default for Config {
@@ -37,9 +58,18 @@ impl Default for Config {
                 model: "nemo-parakeet-tdt-0.6b-v3".to_string(),
                 model_dir: "~/.local/share/neuropipe/stt/parakeet-v3".to_string(),
                 vad_threshold: 0.5,
+                vad_start_frames: 5,
                 digital_gain: 3.0,
                 silence_timeout_sec: 1.0,
                 model_idle_timeout_sec: 60,
+                turn_end_enabled: true,
+                turn_hold_ms: 250,
+                turn_end_threshold: 0.5,
+                turn_score_cadence_ms: 400,
+                turn_hard_ceiling_ms: 3500,
+                turn_detector: "smart_turn".to_string(),
+                smart_turn_model_path: "~/.local/share/neuropipe/stt/smart_turn_v3.2_cpu.onnx".to_string(),
+                smart_turn_min_utterance_ms: 400,
             },
         }
     }
@@ -48,7 +78,10 @@ impl Default for Config {
 fn expand_home(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest).to_string_lossy().into_owned();
+            return PathBuf::from(home)
+                .join(rest)
+                .to_string_lossy()
+                .into_owned();
         }
     }
     path.to_string()
@@ -65,6 +98,11 @@ impl Config {
         dir.parent()
             .map(|p| p.join("silero_vad.onnx"))
             .unwrap_or_else(|| dir.join("silero_vad.onnx"))
+    }
+
+    /// Path to the smart-turn ONNX model (defaults beside the VAD model).
+    pub fn smart_turn_model_path(&self) -> PathBuf {
+        PathBuf::from(expand_home(&self.stt.smart_turn_model_path))
     }
 }
 
@@ -95,6 +133,9 @@ pub fn load() -> Config {
         if let Some(v) = stt.vad_threshold {
             base.stt.vad_threshold = v;
         }
+        if let Some(v) = stt.vad_start_frames {
+            base.stt.vad_start_frames = v;
+        }
         if let Some(v) = stt.digital_gain {
             base.stt.digital_gain = v;
         }
@@ -103,6 +144,30 @@ pub fn load() -> Config {
         }
         if let Some(v) = stt.model_idle_timeout_sec {
             base.stt.model_idle_timeout_sec = v;
+        }
+        if let Some(v) = stt.turn_end_enabled {
+            base.stt.turn_end_enabled = v;
+        }
+        if let Some(v) = stt.turn_hold_ms {
+            base.stt.turn_hold_ms = v;
+        }
+        if let Some(v) = stt.turn_end_threshold {
+            base.stt.turn_end_threshold = v;
+        }
+        if let Some(v) = stt.turn_score_cadence_ms {
+            base.stt.turn_score_cadence_ms = v;
+        }
+        if let Some(v) = stt.turn_hard_ceiling_ms {
+            base.stt.turn_hard_ceiling_ms = v;
+        }
+        if let Some(v) = stt.turn_detector {
+            base.stt.turn_detector = v;
+        }
+        if let Some(v) = stt.smart_turn_model_path {
+            base.stt.smart_turn_model_path = v;
+        }
+        if let Some(v) = stt.smart_turn_min_utterance_ms {
+            base.stt.smart_turn_min_utterance_ms = v;
         }
     }
     base
@@ -120,9 +185,18 @@ struct UserSttConfig {
     model: Option<String>,
     model_dir: Option<String>,
     vad_threshold: Option<f32>,
+    vad_start_frames: Option<u64>,
     digital_gain: Option<f32>,
     silence_timeout_sec: Option<f32>,
     model_idle_timeout_sec: Option<u64>,
+    turn_end_enabled: Option<bool>,
+    turn_hold_ms: Option<u64>,
+    turn_end_threshold: Option<f32>,
+    turn_score_cadence_ms: Option<u64>,
+    turn_hard_ceiling_ms: Option<u64>,
+    turn_detector: Option<String>,
+    smart_turn_model_path: Option<String>,
+    smart_turn_min_utterance_ms: Option<u64>,
 }
 
 fn config_path() -> PathBuf {

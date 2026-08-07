@@ -1,6 +1,8 @@
 use crate::audio::{MicInput, WINDOW_SIZE};
 use crate::config::Config;
-use crate::engines::{parakeet::ParakeetEngine, SttEngine};
+use crate::engines::endpoint::{HeuristicTurnEnd, TurnContext};
+use crate::engines::smart_turn::SmartTurnEngine;
+use crate::engines::{parakeet::ParakeetEngine, SttEngine, TurnEndDetector};
 use crate::vad::Vad;
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -15,34 +17,132 @@ const MAX_RECORDING_SECONDS: u64 = 15;
 const CHUNKS_PER_SEC: f64 = SAMPLE_RATE as f64 / WINDOW_SIZE as f64;
 const PRE_RECORD_CHUNKS: usize = (PRE_RECORD_MS as f64 / 1000.0 * CHUNKS_PER_SEC) as usize;
 const MAX_RECORDING_CHUNKS: usize = (MAX_RECORDING_SECONDS as f64 * CHUNKS_PER_SEC) as usize;
+/// One 512-sample frame at 16 kHz is 32 ms of audio.
+const CHUNK_MS: u64 = WINDOW_SIZE as u64 * 1000 / SAMPLE_RATE as u64;
+/// Rolling audio window handed to the turn-end detector on each score pass.
+const TAIL_SECS: f64 = 1.8;
+const TAIL_SAMPLES: usize = (SAMPLE_RATE as f64 * TAIL_SECS) as usize;
+
+/// Mutable state of the current (or idle) VAD recording session.
+struct Recording {
+    pre_speech: VecDeque<Vec<f32>>,
+    recorded: Vec<Vec<f32>>,
+    tail: VecDeque<f32>,
+    is_recording: bool,
+    silence_ms: u64,
+    last_scored_ms: u64,
+}
+
+impl Recording {
+    fn new() -> Self {
+        Self {
+            pre_speech: VecDeque::with_capacity(PRE_RECORD_CHUNKS),
+            recorded: Vec::new(),
+            tail: VecDeque::with_capacity(TAIL_SAMPLES),
+            is_recording: false,
+            silence_ms: 0,
+            last_scored_ms: 0,
+        }
+    }
+
+    /// Buffer a chunk while idle (keeps the pre-roll ring fresh).
+    fn buffer_pre(&mut self, chunk: Vec<f32>) {
+        if self.pre_speech.len() == PRE_RECORD_CHUNKS {
+            self.pre_speech.pop_front();
+        }
+        self.pre_speech.push_back(chunk);
+    }
+
+    /// Start recording by moving the pre-roll into the buffer.
+    fn start(&mut self) {
+        self.recorded.extend(self.pre_speech.drain(..));
+        self.silence_ms = 0;
+        self.last_scored_ms = 0;
+        self.is_recording = true;
+    }
+
+    /// Append a chunk while recording and maintain the rolling tail window.
+    fn push(&mut self, chunk: &[f32]) {
+        self.recorded.push(chunk.to_vec());
+        for &sample in chunk {
+            self.tail.push_back(sample);
+        }
+        while self.tail.len() > TAIL_SAMPLES {
+            self.tail.pop_front();
+        }
+    }
+
+    /// A speech frame was seen: the current silence run is over.
+    fn on_speech(&mut self) {
+        self.silence_ms = 0;
+        self.last_scored_ms = 0;
+    }
+
+    fn utterance_ms(&self) -> u64 {
+        self.recorded.iter().map(|c| c.len() as u64).sum::<u64>() * 1000 / SAMPLE_RATE as u64
+    }
+
+    fn tail_samples(&self) -> Vec<f32> {
+        self.tail.iter().copied().collect()
+    }
+
+    fn take_recorded(&mut self) -> Vec<f32> {
+        self.recorded.concat()
+    }
+
+    /// Concatenated recording so far, without consuming the buffer.
+    fn recording_samples(&self) -> Vec<f32> {
+        self.recorded.concat()
+    }
+
+    fn reset(&mut self) {
+        self.pre_speech.clear();
+        self.recorded.clear();
+        self.tail.clear();
+        self.is_recording = false;
+        self.silence_ms = 0;
+        self.last_scored_ms = 0;
+    }
+}
 
 pub struct SttService {
     config: Config,
     engine: Option<ParakeetEngine>,
     vad: Option<Vad>,
+    endpoint: Option<Box<dyn TurnEndDetector>>,
     last_activity: Arc<Mutex<Instant>>,
+    vad_onset_frames: u64,
 }
 
 impl SttService {
     pub fn new(config: Config) -> Self {
         let model_dir = config.stt_model_dir();
+        let endpoint = build_turn_end_detector(&config);
         Self {
             config,
             engine: Some(ParakeetEngine::new(model_dir)),
             vad: None,
+            endpoint: Some(endpoint),
             last_activity: Arc::new(Mutex::new(Instant::now())),
+            vad_onset_frames: 0,
         }
     }
 
     pub fn run(&mut self) -> Result<()> {
         let initial_mode = self.config.stt.mode.clone();
 
+        let fake_wav = std::env::var_os("FAKE_MIC");
         let (audio_tx, audio_rx) = mpsc::channel();
-        let _mic;
-        if let Some(wav) = std::env::var_os("FAKE_MIC") {
-            crate::audio::FakeMic::open(wav, audio_tx)?;
+        let use_real_mic = fake_wav.is_none();
+        let mut mic: Option<MicInput> = None;
+        if use_real_mic {
+            // Keep the mic hardware off while starting in IDLE; it is opened
+            // on the first mode switch away from IDLE.
+            if initial_mode != "IDLE" {
+                mic = Some(MicInput::open(audio_tx.clone())?);
+            }
         } else {
-            _mic = MicInput::open(audio_tx)?;
+            crate::audio::FakeMic::open(fake_wav.expect("FAKE_MIC"), audio_tx.clone())?;
         }
 
         let vad_path = self.config.vad_path();
@@ -57,7 +157,9 @@ impl SttService {
         let last_activity = Arc::clone(&self.last_activity);
         std::thread::Builder::new()
             .name("stt-transcriber".to_string())
-            .spawn(move || transcription_worker(job_rx, result_tx, engine, last_activity, idle_timeout))?;
+            .spawn(move || {
+                transcription_worker(job_rx, result_tx, engine, last_activity, idle_timeout)
+            })?;
 
         let context = zmq::Context::new();
         let pub_sock = context.socket(zmq::PUB)?;
@@ -67,12 +169,7 @@ impl SttService {
         println!("STT Rust service running on {}", self.config.ipc.stt_cmd);
 
         let mut mode = initial_mode;
-        let mut pre_speech: VecDeque<Vec<f32>> = VecDeque::with_capacity(PRE_RECORD_CHUNKS);
-        let mut recorded: Vec<Vec<f32>> = Vec::new();
-        let mut is_recording = false;
-        let mut silence_counter = 0usize;
-        let max_silence_chunks = (self.config.stt.silence_timeout_sec as f64 * CHUNKS_PER_SEC)
-            .ceil() as usize;
+        let mut rec = Recording::new();
 
         let mut poll_items = [rep_sock.as_poll_item(zmq::POLLIN)];
         loop {
@@ -80,15 +177,10 @@ impl SttService {
 
             if poll_items[0].is_readable() {
                 let message: Value = serde_json::from_slice(&rep_sock.recv_bytes(0)?)?;
-                let response = self.handle_command(
-                    &message,
-                    &mut mode,
-                    &mut pre_speech,
-                    &mut recorded,
-                    &mut is_recording,
-                    &pub_sock,
-                    &job_tx,
-                );
+                let prev_mode = mode.clone();
+                let response =
+                    self.handle_command(&message, &mut mode, &mut rec, &pub_sock, &job_tx);
+                sync_mic(&mut mic, &audio_tx, use_real_mic, &prev_mode, &mode);
                 rep_sock.send(response.to_string().as_bytes(), 0)?;
             }
 
@@ -96,7 +188,9 @@ impl SttService {
             while let Ok(text) = result_rx.try_recv() {
                 eprintln!("[STT] > {text}");
                 let _ = pub_sock.send(
-                    json!({"event": "transcription", "text": text}).to_string().as_bytes(),
+                    json!({"event": "transcription", "text": text})
+                        .to_string()
+                        .as_bytes(),
                     0,
                 );
             }
@@ -111,18 +205,9 @@ impl SttService {
                         self.apply_gain(&mut chunk);
                         match mode.as_str() {
                             "VAD" => {
-                                self.process_vad(
-                                    chunk,
-                                    &mut pre_speech,
-                                    &mut recorded,
-                                    &mut is_recording,
-                                    &mut silence_counter,
-                                    max_silence_chunks,
-                                    &pub_sock,
-                                    &job_tx,
-                                );
+                                self.process_vad(chunk, &mut rec, &pub_sock, &job_tx);
                             }
-                            "MANUAL" => recorded.push(chunk),
+                            "MANUAL" => rec.recorded.push(chunk),
                             _ => {}
                         }
                     }
@@ -138,11 +223,7 @@ impl SttService {
     fn process_vad(
         &mut self,
         chunk: Vec<f32>,
-        pre_speech: &mut VecDeque<Vec<f32>>,
-        recorded: &mut Vec<Vec<f32>>,
-        is_recording: &mut bool,
-        silence_counter: &mut usize,
-        max_silence_chunks: usize,
+        rec: &mut Recording,
         pub_sock: &zmq::Socket,
         job_tx: &mpsc::Sender<Vec<f32>>,
     ) {
@@ -153,54 +234,123 @@ impl SttService {
             .and_then(|v| v.predict(&chunk).ok())
             .unwrap_or(0.0);
 
-        if !*is_recording {
-            if pre_speech.len() == PRE_RECORD_CHUNKS {
-                pre_speech.pop_front();
-            }
-            pre_speech.push_back(chunk);
-            if prob > threshold {
-                *is_recording = true;
+        if !rec.is_recording {
+            rec.buffer_pre(chunk);
+            if should_start_recording(
+                prob,
+                threshold,
+                self.config.stt.vad_start_frames,
+                &mut self.vad_onset_frames,
+            ) {
+                rec.start();
                 eprintln!("[STT] VAD start");
                 let _ = pub_sock.send(
                     json!({"event": "listening_start"}).to_string().as_bytes(),
                     0,
                 );
-                recorded.extend(pre_speech.drain(..));
-                *silence_counter = 0;
             }
-        } else {
-            recorded.push(chunk);
-            if prob < threshold {
-                *silence_counter += 1;
-            } else {
-                *silence_counter = 0;
-            }
-            if *silence_counter > max_silence_chunks || recorded.len() > MAX_RECORDING_CHUNKS {
-                eprintln!("[STT] Processing...");
-                let full = recorded.concat();
-                recorded.clear();
-                *is_recording = false;
-                *silence_counter = 0;
-                if let Some(v) = self.vad.as_mut() {
-                    v.reset();
-                }
-                let _ = pub_sock.send(
-                    json!({"event": "listening_end"}).to_string().as_bytes(),
-                    0,
-                );
-                touch_activity(&self.last_activity);
-                let _ = job_tx.send(full);
-            }
+            return;
         }
+
+        rec.push(&chunk);
+        if prob >= threshold {
+            rec.on_speech();
+            return;
+        }
+
+        rec.silence_ms += CHUNK_MS;
+        if rec.recorded.len() > MAX_RECORDING_CHUNKS || self.should_end_turn(rec, prob) {
+            self.end_turn(rec, pub_sock, job_tx);
+        }
+    }
+}
+
+/// Debounced VAD onset: count consecutive above-threshold frames and only
+/// signal a start once `required_frames` are seen in a row (resets on any
+/// quiet frame). Filters single-frame noise spikes from triggering a barge-in.
+fn should_start_recording(
+    prob: f32,
+    threshold: f32,
+    required_frames: u64,
+    onset: &mut u64,
+) -> bool {
+    if prob > threshold {
+        *onset += 1;
+        if *onset >= required_frames {
+            *onset = 0;
+            true
+        } else {
+            false
+        }
+    } else {
+        *onset = 0;
+        false
+    }
+}
+
+impl SttService {
+    /// Decide whether the current pause marks the end of the turn. When
+    /// `turn_end_enabled`, a small detector scores the pause (after a hold
+    /// window, re-scored on a cadence) and a hard ceiling always finalizes.
+    /// Otherwise falls back to the legacy fixed `silence_timeout_sec`.
+    fn should_end_turn(&mut self, rec: &mut Recording, prob: f32) -> bool {
+        let cfg = &self.config.stt;
+        if cfg.turn_end_enabled {
+            if rec.silence_ms >= cfg.turn_hard_ceiling_ms {
+                return true;
+            }
+            if rec.silence_ms >= cfg.turn_hold_ms
+                && rec.silence_ms - rec.last_scored_ms >= cfg.turn_score_cadence_ms
+            {
+                let ctx = TurnContext {
+                    tail: rec.tail_samples(),
+                    recording: rec.recording_samples(),
+                    silence_ms: rec.silence_ms,
+                    utterance_ms: rec.utterance_ms(),
+                    last_vad: prob,
+                };
+                let score = self
+                    .endpoint
+                    .as_mut()
+                    .map(|detector| detector.score(&ctx))
+                    .unwrap_or(0.0);
+                eprintln!("[STT] turn score={score:.3} silence={}ms", rec.silence_ms);
+                rec.last_scored_ms = rec.silence_ms;
+                return score > cfg.turn_end_threshold;
+            }
+            false
+        } else {
+            let max_silence_ms = (cfg.silence_timeout_sec as f64 * 1000.0) as u64;
+            rec.silence_ms >= max_silence_ms
+        }
+    }
+
+    fn end_turn(
+        &mut self,
+        rec: &mut Recording,
+        pub_sock: &zmq::Socket,
+        job_tx: &mpsc::Sender<Vec<f32>>,
+    ) {
+        eprintln!("[STT] Processing...");
+        let full = rec.take_recorded();
+        rec.reset();
+        self.vad_onset_frames = 0;
+        if let Some(v) = self.vad.as_mut() {
+            v.reset();
+        }
+        if let Some(detector) = self.endpoint.as_mut() {
+            detector.reset();
+        }
+        let _ = pub_sock.send(json!({"event": "listening_end"}).to_string().as_bytes(), 0);
+        touch_activity(&self.last_activity);
+        let _ = job_tx.send(full);
     }
 
     fn handle_command(
         &mut self,
         message: &Value,
         mode: &mut String,
-        pre_speech: &mut VecDeque<Vec<f32>>,
-        recorded: &mut Vec<Vec<f32>>,
-        is_recording: &mut bool,
+        rec: &mut Recording,
         pub_sock: &zmq::Socket,
         job_tx: &mpsc::Sender<Vec<f32>>,
     ) -> Value {
@@ -208,7 +358,9 @@ impl SttService {
             Some("get_state") => json!({
                 "mode": mode,
                 "vad_threshold": self.config.stt.vad_threshold,
+                "vad_start_frames": self.config.stt.vad_start_frames,
                 "silence_timeout_sec": self.config.stt.silence_timeout_sec,
+                "turn_end_enabled": self.config.stt.turn_end_enabled,
                 "sample_rate": SAMPLE_RATE,
                 "model": self.config.stt.model,
             }),
@@ -219,35 +371,36 @@ impl SttService {
                     .unwrap_or("IDLE")
                     .to_string();
                 *mode = new_mode;
-                *is_recording = false;
-                recorded.clear();
-                pre_speech.clear();
+                rec.reset();
+                self.vad_onset_frames = 0;
                 if *mode == "VAD" {
                     if let Some(v) = self.vad.as_mut() {
                         v.reset();
                     }
                 }
                 let _ = pub_sock.send(
-                    json!({"event": "mode_changed", "mode": mode}).to_string().as_bytes(),
+                    json!({"event": "mode_changed", "mode": mode})
+                        .to_string()
+                        .as_bytes(),
                     0,
                 );
                 touch_activity(&self.last_activity);
                 json!({"status": "ok"})
             }
             Some("manual_stop") => {
-                if !recorded.is_empty() {
-                    let full = std::mem::take(recorded).concat();
+                if !rec.recorded.is_empty() {
+                    let full = rec.take_recorded();
                     touch_activity(&self.last_activity);
                     let _ = job_tx.send(full);
                 }
                 *mode = "IDLE".to_string();
-                *is_recording = false;
-                recorded.clear();
-                pre_speech.clear();
+                rec.reset();
                 touch_activity(&self.last_activity);
                 json!({"status": "ok"})
             }
-            Some(command) => json!({"status": "error", "message": format!("Unknown command '{command}'")}),
+            Some(command) => {
+                json!({"status": "error", "message": format!("Unknown command '{command}'")})
+            }
             None => json!({"status": "error", "message": "Missing command"}),
         }
     }
@@ -271,6 +424,67 @@ impl SttService {
 fn touch_activity(last_activity: &Arc<Mutex<Instant>>) {
     if let Ok(mut a) = last_activity.lock() {
         *a = Instant::now();
+    }
+}
+
+/// Select the turn-end detector from the config. `smart_turn` loads the ONNX
+/// classifier; if it is unavailable a warning is printed once and the
+/// heuristic scorer is used instead.
+fn build_turn_end_detector(config: &Config) -> Box<dyn TurnEndDetector> {
+    match config.stt.turn_detector.as_str() {
+        "smart_turn" => {
+            let path = config.smart_turn_model_path();
+            match SmartTurnEngine::new(&path) {
+                Ok(engine) => Box::new(
+                    engine.with_min_utterance_ms(config.stt.smart_turn_min_utterance_ms),
+                ),
+                Err(error) => {
+                    eprintln!(
+                        "[STT] warning: smart-turn model unavailable ({}); using heuristic turn-end",
+                        error
+                    );
+                    Box::new(HeuristicTurnEnd::new())
+                }
+            }
+        }
+        "heuristic" => Box::new(HeuristicTurnEnd::new()),
+        other => {
+            eprintln!(
+                "[STT] warning: unknown turn_detector '{other}'; using heuristic turn-end"
+            );
+            Box::new(HeuristicTurnEnd::new())
+        }
+    }
+}
+
+/// Gate the microphone on the service mode: only capture while not in IDLE.
+/// Entering IDLE drops the stream (closing the ALSA device so the hardware is
+/// truly off); leaving IDLE reopens it. A dropped-then-reopened stream is
+/// reliable across devices, unlike `pause()` which silently no-ops on
+/// hardware without ALSA pause support. The fake mic (tests) has no hardware
+/// and is left running; open failures are logged but non-fatal.
+fn sync_mic(
+    mic: &mut Option<MicInput>,
+    audio_tx: &mpsc::Sender<Vec<f32>>,
+    use_real_mic: bool,
+    prev_mode: &str,
+    cur_mode: &str,
+) {
+    if prev_mode == cur_mode || !use_real_mic {
+        return;
+    }
+    if cur_mode == "IDLE" {
+        if mic.take().is_some() {
+            eprintln!("[STT] mic off (IDLE)");
+        }
+    } else if mic.is_none() {
+        match MicInput::open(audio_tx.clone()) {
+            Ok(m) => {
+                *mic = Some(m);
+                eprintln!("[STT] mic on ({cur_mode})");
+            }
+            Err(e) => eprintln!("[STT] warning: could not open mic: {e:#}"),
+        }
     }
 }
 
@@ -313,7 +527,10 @@ fn transcription_worker(
                     engine.is_loaded()
                 };
                 if should_unload {
-                    eprintln!("[STT] idle for {}s; unloading model", idle_timeout.as_secs());
+                    eprintln!(
+                        "[STT] idle for {}s; unloading model",
+                        idle_timeout.as_secs()
+                    );
                     {
                         let mut engine = engine.lock().unwrap();
                         engine.unload();
@@ -336,3 +553,218 @@ fn trim_process_heap() {
 
 #[cfg(not(target_os = "linux"))]
 fn trim_process_heap() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(sample: f32) -> Vec<f32> {
+        vec![sample; WINDOW_SIZE]
+    }
+
+    #[test]
+    fn recording_pre_roll_ring_is_bounded() {
+        let mut rec = Recording::new();
+        for i in 0..PRE_RECORD_CHUNKS + 5 {
+            rec.buffer_pre(chunk(i as f32));
+        }
+        assert_eq!(rec.pre_speech.len(), PRE_RECORD_CHUNKS);
+    }
+
+    #[test]
+    fn recording_tail_is_bounded() {
+        let mut rec = Recording::new();
+        rec.start();
+        // Feed far more audio than the tail window.
+        for _ in 0..(TAIL_SAMPLES / WINDOW_SIZE + 50) {
+            rec.push(&chunk(0.1));
+        }
+        assert!(rec.tail.len() <= TAIL_SAMPLES);
+    }
+
+    #[test]
+    fn recording_utterance_ms_tracks_samples() {
+        let mut rec = Recording::new();
+        rec.start();
+        for _ in 0..100 {
+            rec.push(&chunk(0.1));
+        }
+        // 100 chunks * 512 samples = 51200 samples = 3.2 s.
+        assert_eq!(rec.utterance_ms(), 3200);
+    }
+
+    #[test]
+    fn silence_run_resets_on_speech() {
+        let mut rec = Recording::new();
+        rec.start();
+        rec.silence_ms = 500;
+        rec.last_scored_ms = 300;
+        rec.on_speech();
+        assert_eq!(rec.silence_ms, 0);
+        assert_eq!(rec.last_scored_ms, 0);
+    }
+
+    #[test]
+    fn vad_onset_needs_sustained_frames() {
+        let mut onset = 0u64;
+        // A single transient loud frame must not start a recording.
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        // A quiet frame resets the streak.
+        assert!(!should_start_recording(0.1, 0.5, 5, &mut onset));
+        assert_eq!(onset, 0);
+        // Sustained frames start only on the 5th consecutive one.
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        assert!(!should_start_recording(0.9, 0.5, 5, &mut onset));
+        assert!(should_start_recording(0.9, 0.5, 5, &mut onset));
+        // Counter resets after firing.
+        assert_eq!(onset, 0);
+    }
+
+    #[test]
+    fn vad_onset_required_one_fires_immediately() {
+        let mut onset = 0u64;
+        assert!(should_start_recording(0.9, 0.5, 1, &mut onset));
+        assert_eq!(onset, 0);
+    }
+
+    fn tail_glide(freq_from: f32, freq_to: f32) -> Vec<f32> {
+        let sr = 16_000.0f32;
+        let n = (0.6 * sr) as usize;
+        let mut out = Vec::with_capacity(n);
+        let mut phase = 0.0f32;
+        for i in 0..n {
+            let frac = i as f32 / n as f32;
+            let freq = freq_from + (freq_to - freq_from) * frac;
+            out.push(phase.sin());
+            phase += 2.0 * std::f32::consts::PI * freq / sr;
+        }
+        out
+    }
+
+    fn test_service(config: Config) -> SttService {
+        SttService::new(config)
+    }
+
+    /// Config pinned to the heuristic detector for the heuristic behavior tests.
+    fn heuristic_config() -> Config {
+        let mut config = Config::default();
+        config.stt.turn_detector = "heuristic".into();
+        config
+    }
+
+    #[test]
+    fn endpoint_holds_below_hold_window() {
+        let mut svc = test_service(heuristic_config());
+        let mut rec = Recording::new();
+        rec.start();
+        rec.push(&tail_glide(440.0, 160.0));
+        rec.silence_ms = 100; // below turn_hold_ms (250)
+        assert!(!svc.should_end_turn(&mut rec, 0.0));
+    }
+
+    #[test]
+    fn endpoint_finalizes_at_hard_ceiling() {
+        let mut svc = test_service(heuristic_config());
+        let mut rec = Recording::new();
+        rec.start();
+        rec.push(&tail_glide(440.0, 220.0));
+        rec.silence_ms = 3600; // >= turn_hard_ceiling_ms (3500)
+        assert!(svc.should_end_turn(&mut rec, 0.0));
+    }
+
+    #[test]
+    fn endpoint_keeps_recording_on_flat_contour() {
+        let mut svc = test_service(heuristic_config());
+        let mut rec = Recording::new();
+        rec.start();
+        rec.push(&tail_glide(220.0, 220.0)); // flat => continuation
+        rec.silence_ms = 700;
+        assert!(!svc.should_end_turn(&mut rec, 0.0));
+    }
+
+    #[test]
+    fn endpoint_finalizes_early_on_terminal_contour() {
+        let mut svc = test_service(heuristic_config());
+        let mut rec = Recording::new();
+        rec.start();
+        rec.push(&tail_glide(440.0, 160.0)); // falling => terminal
+        rec.silence_ms = 700;
+        assert!(svc.should_end_turn(&mut rec, 0.0));
+    }
+
+    #[test]
+    fn endpoint_keeps_recording_on_flat_contour_at_long_pause() {
+        // Regression: "…a bit more about … apple" truncated at ~1.66s. A flat
+        // mid-thought contour must not finalize even after a long pause.
+        let mut svc = test_service(heuristic_config());
+        let mut rec = Recording::new();
+        rec.start();
+        rec.push(&tail_glide(220.0, 220.0)); // flat => continuation
+        rec.silence_ms = 1664; // the exact pause length that truncated before
+        assert!(!svc.should_end_turn(&mut rec, 0.0));
+    }
+
+    #[test]
+    fn endpoint_keeps_recording_on_unvoiced_tail_at_long_pause() {
+        // Regression: trailing speech fell out of the tail window, leaving
+        // only silence. The unvoiced tail must not read as terminal.
+        let mut svc = test_service(heuristic_config());
+        let mut rec = Recording::new();
+        rec.start();
+        rec.push(&vec![0.0; WINDOW_SIZE]);
+        rec.silence_ms = 1664;
+        assert!(!svc.should_end_turn(&mut rec, 0.0));
+    }
+
+    #[test]
+    fn endpoint_respects_score_cadence() {
+        let mut svc = test_service(heuristic_config());
+        let mut rec = Recording::new();
+        rec.start();
+        rec.push(&tail_glide(440.0, 160.0));
+        rec.silence_ms = 600;
+        assert!(svc.should_end_turn(&mut rec, 0.0)); // first score fires
+        rec.silence_ms = 632; // only 32ms later, under cadence (400)
+        assert!(!svc.should_end_turn(&mut rec, 0.0));
+    }
+
+    #[test]
+    fn endpoint_falls_back_to_fixed_silence_when_disabled() {
+        let stt = crate::config::SttConfig {
+            mode: "VAD".into(),
+            model: "m".into(),
+            model_dir: "d".into(),
+            vad_threshold: 0.5,
+            vad_start_frames: 5,
+            digital_gain: 1.0,
+            silence_timeout_sec: 1.0,
+            model_idle_timeout_sec: 60,
+            turn_end_enabled: false,
+            turn_hold_ms: 250,
+            turn_end_threshold: 0.5,
+            turn_score_cadence_ms: 400,
+            turn_hard_ceiling_ms: 3500,
+            turn_detector: "heuristic".into(),
+            smart_turn_model_path: "smart_turn_v3.2_cpu.onnx".into(),
+            smart_turn_min_utterance_ms: 400,
+        };
+        let config = crate::config::Config {
+            ipc: crate::config::IpcConfig {
+                stt_cmd: "ipc:///tmp/t.sock".into(),
+                stt_pub: "ipc:///tmp/t.sock".into(),
+            },
+            stt,
+        };
+        let mut svc = test_service(config);
+        let mut rec = Recording::new();
+        rec.start();
+        rec.push(&tail_glide(440.0, 160.0));
+        rec.silence_ms = 500; // under 1s fixed timeout
+        assert!(!svc.should_end_turn(&mut rec, 0.0));
+        rec.silence_ms = 1024; // over 1s fixed timeout
+        assert!(svc.should_end_turn(&mut rec, 0.0));
+    }
+}
