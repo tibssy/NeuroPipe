@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -292,6 +292,11 @@ fn is_cloud_model(model: &str) -> bool {
     model.ends_with(":cloud")
 }
 
+/// Current local time as a compact human-readable string, e.g. "Tue 2026-08-09 14:32".
+fn now_str() -> String {
+    chrono::Local::now().format("%a %Y-%m-%d %H:%M").to_string()
+}
+
 // ---------- memory ----------
 
 impl Shared {
@@ -410,7 +415,10 @@ impl Shared {
         metadata.insert("model".to_string(), model.clone());
         metadata.insert("mode".to_string(), self.mode.lock().unwrap().clone());
         metadata.insert("cloud_model".to_string(), is_cloud_model(&model).to_string());
-        if self.memory.add_summary(&summary, &metadata, &self.ollama) {
+        // Stamp the stored summary with when it was captured so retrieved
+        // memory carries a date. Dedup stays keyed on the raw summary.
+        let stored = format!("[{}] {}", now_str(), summary);
+        if self.memory.add_summary(&stored, &metadata, &self.ollama) {
             *self.last_memory_digest.lock().unwrap() = Some(digest);
             println!("[memory] Saved summary ({trigger})");
         }
@@ -562,6 +570,17 @@ impl Shared {
         memory_context: Option<&str>,
     ) -> Option<(Vec<crate::ollama::ToolCall>, String)> {
         let mut request_messages = self.history_json();
+        // Stamp each user message with the time it is being answered, so the
+        // model knows "now" (weather tomorrow, upcoming dates, etc.). Applied
+        // only to the request payload; stored history stays clean.
+        let now = now_str();
+        for msg in request_messages.iter_mut() {
+            if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
+                if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+                    msg["content"] = json!(format!("[{now}] {content}"));
+                }
+            }
+        }
         if let Some(ctx) = memory_context {
             let memory_msg = json!({"role": "system", "content": ctx});
             if request_messages.first().and_then(|m| m.get("role")).and_then(|r| r.as_str()) == Some("system") {
@@ -689,6 +708,10 @@ impl Shared {
             Some(tools_payload)
         };
 
+        // Small local models sometimes emit the same tool call twice (within one
+        // response or repeated in a later round); execute each unique call once.
+        let mut executed_tools: HashSet<(String, String)> = HashSet::new();
+
         for round_num in 0..MAX_TOOL_ROUNDS {
             let round_tools = if round_num == 0 { tools.as_deref() } else { None };
             let result = self.stream_and_speak(
@@ -712,6 +735,11 @@ impl Shared {
             for tc in called {
                 let name = tc.name.clone();
                 let args = tc.arguments.clone();
+                let key = (name.clone(), serde_json::to_string(&args).unwrap_or_default());
+                if !executed_tools.insert(key) {
+                    println!("\n[Tool: {name} — skipped duplicate call]");
+                    continue;
+                }
                 println!("\n[Tool: {name}({args})]");
                 match self.check_tool_permission(&name) {
                     Some(err) => {
