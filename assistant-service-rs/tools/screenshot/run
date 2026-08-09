@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import json
 import os
+import shutil
 import subprocess as sp
 import sys
 
 SCREENSHOT_DIR = "/tmp/neuropipe_screenshots"
+NIRI_GAP = 16  # niri default tile gap, used to estimate the window's top offset
 
 
 def detect_compositor() -> str:
@@ -18,19 +20,37 @@ def detect_compositor() -> str:
     return "unknown"
 
 
-def focused_geometry(compositor: str) -> str | None:
+def jcmd(cmd: list):
     try:
-        if compositor == "hyprland":
-            out = sp.run(["hyprctl", "-j", "activewindow"], capture_output=True, text=True).stdout
-            d = json.loads(out)
+        return json.loads(sp.run(cmd, capture_output=True, text=True, timeout=5).stdout)
+    except Exception:
+        return None
+
+
+def focused_geometry(compositor: str) -> str | None:
+    """'x,y WxH' of the active/focused window, or None if unknown."""
+    if compositor == "hyprland":
+        d = jcmd(["hyprctl", "-j", "activewindow"])
+        if d and d.get("at") and d.get("size"):
             return f"{d['at'][0]},{d['at'][1]} {d['size'][0]}x{d['size'][1]}"
-        elif compositor == "niri":
-            out = sp.run(["niri", "msg", "focused-window"], capture_output=True, text=True).stdout
-            d = json.loads(out)["geometry"]
-            return f"{d['x']},{d['y']} {d['width']}x{d['height']}"
-        elif compositor == "sway":
-            out = sp.run(["swaymsg", "-t", "get_tree"], capture_output=True, text=True).stdout
-            d = json.loads(out)
+    elif compositor == "niri":
+        out = jcmd(["niri", "msg", "-j", "focused-output"])
+        win = jcmd(["niri", "msg", "-j", "focused-window"])
+        if not (out and win and win.get("layout")):
+            return None
+        lo = out.get("logical")
+        layout = win["layout"]
+        if not lo:
+            return None
+        ww, wh = layout.get("window_size") or layout.get("tile_size") or [0, 0]
+        if not ww or not wh:
+            return None
+        x = lo["x"] + (lo["width"] - ww) // 2
+        y = lo["y"] + min((lo["height"] - wh) // 2, NIRI_GAP)
+        return f"{x},{y} {ww}x{wh}"
+    elif compositor == "sway":
+        d = jcmd(["swaymsg", "-t", "get_tree"])
+        if d:
             def find(node):
                 if node.get("focused"):
                     return node["rect"]
@@ -42,36 +62,70 @@ def focused_geometry(compositor: str) -> str | None:
             r = find(d)
             if r:
                 return f"{r['x']},{r['y']} {r['width']}x{r['height']}"
-    except Exception:
-        pass
     return None
 
 
+def active_output(compositor: str) -> str | None:
+    """Name of the currently focused monitor, or None if unknown."""
+    if compositor == "hyprland":
+        for m in jcmd(["hyprctl", "-j", "monitors"]) or []:
+            if m.get("focused"):
+                return m.get("name")
+    elif compositor == "niri":
+        d = jcmd(["niri", "msg", "-j", "focused-output"])
+        if d:
+            return d.get("name")
+    elif compositor == "sway":
+        for o in jcmd(["swaymsg", "-t", "get_outputs"]) or []:
+            if o.get("focused"):
+                return o.get("name")
+    return None
+
+
+def run_cmd(cmd: list) -> bool:
+    try:
+        return sp.run(cmd).returncode == 0
+    except (FileNotFoundError, OSError):
+        return False
+
+
 def capture(region: str, path: str) -> bool:
-    if region == "focused":
-        geom = focused_geometry(detect_compositor())
-        if geom:
-            return sp.run(["grim", "-g", geom, path]).returncode == 0
+    compositor = detect_compositor()
+    if region == "select":
         geom = sp.run(["slurp"], capture_output=True, text=True).stdout.strip()
         if geom:
-            return sp.run(["grim", "-g", geom, path]).returncode == 0
+            return run_cmd(["grim", "-g", geom, path])
         return False
-    elif region == "screen":
-        return sp.run(["grim", path]).returncode == 0
-    elif region == "select":
-        geom = sp.run(["slurp"], capture_output=True, text=True).stdout.strip()
-        if geom:
-            return sp.run(["grim", "-g", geom, path]).returncode == 0
-        return False
-    return False
+    if region == "screen":
+        out = active_output(compositor)
+        if out and run_cmd(["grim", "-o", out, path]):
+            return True
+        return run_cmd(["grim", path])
+    # Primary: screenshot of the active/focused window.
+    geom = focused_geometry(compositor)
+    if geom and run_cmd(["grim", "-g", geom, path]):
+        return True
+    # Fallback: the active monitor, then the default (full) screen.
+    out = active_output(compositor)
+    if out and run_cmd(["grim", "-o", out, path]):
+        return True
+    return run_cmd(["grim", path])
 
 
 def ocr(path: str) -> str:
-    result = sp.run(
-        ["tesseract", path, "stdout", "--oem", "3", "--psm", "6"],
-        capture_output=True, text=True, timeout=30,
-    )
-    return result.stdout.strip() or "(no text detected)"
+    try:
+        result = sp.run(
+            ["tesseract", path, "stdout", "--oem", "3", "--psm", "6"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, OSError):
+        return "(OCR failed: tesseract not available)"
+    except sp.TimeoutExpired:
+        return "(OCR timed out)"
+    text = result.stdout.strip() or "(no text detected)"
+    if len(text) > 2000:
+        text = text[:2000] + "…[truncated]"
+    return text
 
 
 def main():
@@ -81,6 +135,14 @@ def main():
         params = json.loads(sys.stdin.read())
 
     region = params.get("region", "focused")
+    missing = [bin for bin in ("grim", "tesseract") if shutil.which(bin) is None]
+    if missing:
+        print(json.dumps({
+            "success": False,
+            "error": f"Missing dependencies: {', '.join(missing)}. Install grim and tesseract.",
+        }))
+        return
+
     os.makedirs(SCREENSHOT_DIR, exist_ok=True)
     path = os.path.join(SCREENSHOT_DIR, "capture.png")
 

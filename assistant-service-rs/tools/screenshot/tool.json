@@ -8,7 +8,7 @@
       "region": {
         "type": "string",
         "enum": ["focused", "screen", "select"],
-        "description": "Which area to capture: 'focused' for the active window, 'screen' for the full display, 'select' for interactive area selection"
+        "description": "Which area to capture: 'focused' (default) captures the active window, falling back to the active or default screen; 'screen' captures the active display; 'select' lets the user pick an area"
       }
     },
     "required": ["region"]

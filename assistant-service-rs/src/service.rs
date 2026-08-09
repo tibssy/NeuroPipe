@@ -215,6 +215,11 @@ impl Shared {
                 }
                 parts.push(String::new());
                 parts.push(self.cfg.assistant.tool_usage_policy.clone());
+                parts.push(
+                    "Search the web at most once per unique query — report what you find and do \
+                     not re-search the same topic with slightly different queries."
+                        .to_string(),
+                );
             }
         }
         HistoryEntry {
@@ -490,7 +495,7 @@ impl Shared {
     }
 
     fn check_tool_permission(&self, name: &str) -> Option<String> {
-        let tools = self.tools.lock().unwrap();
+        let mut tools = self.tools.lock().unwrap();
         match tools.check(name).as_str() {
             "allow" => None,
             "deny" => Some(format!("Tool '{name}' is disabled.")),
@@ -498,6 +503,7 @@ impl Shared {
                 if tools.is_granted(name) {
                     None
                 } else {
+                    tools.mark_pending(name);
                     notify(
                         "NeuroPipe Assistant",
                         &format!(
@@ -524,19 +530,15 @@ impl Shared {
             return false;
         }
         let mut tools = self.tools.lock().unwrap();
-        let names: Vec<String> = tools
-            .list_all()
-            .as_object()
-            .map(|o| o.keys().cloned().collect())
-            .unwrap_or_default();
-        let mut any = false;
-        for name in names {
-            if tools.check(&name) == "ask" && !tools.is_granted(&name) {
-                tools.grant(&name);
-                any = true;
-            }
+        let Some(name) = tools.pending_tool().map(|s| s.to_string()) else {
+            return false;
+        };
+        if tools.check(&name) == "ask" && !tools.is_granted(&name) {
+            tools.grant(&name);
+            true
+        } else {
+            false
         }
-        any
     }
 
     fn truncate_history(&self, spoken: &[String], last_spoken: &str) {
@@ -692,7 +694,7 @@ impl Shared {
     fn ask_ollama(&self, text: &str) {
         println!("\nYou: {text}");
         if self.auto_grant_from_text(text) {
-            println!("[Auto-granted permission for all 'ask' tools this session]");
+            println!("[Auto-granted permission for this session]");
         }
         self.history.lock().unwrap().push(HistoryEntry {
             role: "user".to_string(),

@@ -1,8 +1,10 @@
 #!/bin/bash
-set -e
 
 PARAMS="$1"
-URL=$(echo "$PARAMS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('url',''))" 2>/dev/null)
+URL=$(echo "$PARAMS" | python3 -c "import sys,json; print((json.load(sys.stdin).get('url') or '').strip())" 2>/dev/null)
+
+# Language models often append punctuation or wrap the URL in quotes.
+URL=$(echo "$URL" | sed -E 's/[.,;:!?]+$//; s/["\047]$//; s/^["\047]//')
 
 if [[ -z "$URL" ]]; then
   echo '{"success": false, "error": "No URL provided"}'
@@ -10,11 +12,16 @@ if [[ -z "$URL" ]]; then
 fi
 
 if command -v xdg-open &>/dev/null; then
-  xdg-open "$URL" 2>/dev/null
-  echo "{\"success\": true, \"result\": \"Opened $URL in the default browser\"}"
+  OPEN=xdg-open
 elif command -v xdg-www-browser &>/dev/null; then
-  xdg-www-browser "$URL" 2>/dev/null
+  OPEN=xdg-www-browser
+else
+  echo '{"success": false, "error": "No browser opener found (xdg-open not available)"}'
+  exit 0
+fi
+
+if "$OPEN" "$URL" >/dev/null 2>&1; then
   echo "{\"success\": true, \"result\": \"Opened $URL in the default browser\"}"
 else
-  echo "{\"success\": false, \"error\": \"No browser opener found (xdg-open not available)\"}"
+  echo "{\"success\": false, \"error\": \"Failed to open $URL with $OPEN\"}"
 fi
