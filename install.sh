@@ -510,6 +510,67 @@ handle_kokoro_models() {
   printf "\e[32mKokoro models downloaded to %s\e[0m\n" "$models_dir"
 }
 
+handle_supertonic_models() {
+  local models_dir="$HOME/.local/share/neuropipe/models/supertonic-3"
+  local revision="724fb5abbf5502583fb520898d45929e62f02c0b"
+  local base_url="https://huggingface.co/Supertone/supertonic-3/resolve/$revision"
+
+  local -a required_files=(
+    "onnx/tts.json"
+    "onnx/unicode_indexer.json"
+    "onnx/duration_predictor.onnx"
+    "onnx/text_encoder.onnx"
+    "onnx/vector_estimator.onnx"
+    "onnx/vocoder.onnx"
+  )
+
+  local all_present=true
+  for file in "${required_files[@]}"; do
+    if [[ ! -f "$models_dir/$file" ]]; then
+      all_present=false
+      break
+    fi
+  done
+
+  if [[ "$all_present" == true ]]; then
+    printf "\n\e[32mSupertonic-3 models already present in %s\e[0m\n" "$models_dir"
+    return 0
+  fi
+
+  printf "\n\e[36mSupertonic-3 TTS model is from Supertone (OpenRAIL-M / MIT).\e[0m\n"
+  printf "\e[36mSee https://huggingface.co/Supertone/supertonic-3\e[0m\n"
+  printf "\n\e[36mPre-download Supertonic-3 TTS model files (~400MB total)? [y/N]: \e[0m"
+  local answer
+  read -r answer
+  if [[ ! "$answer" =~ ^[yY] ]]; then
+    printf "\n\e[33mSupertonic-3 models were not downloaded; download them before using the supertonic-3 engine.\e[0m\n"
+    return 0
+  fi
+
+  printf "\n\e[34mDownloading Supertonic-3 models to %s...\e[0m\n" "$models_dir"
+  mkdir -p "$models_dir/onnx" "$models_dir/voice_styles"
+
+  local file
+  for file in "${required_files[@]}"; do
+    printf "\n\e[34mDownloading %s...\e[0m\n" "$file"
+    if ! curl -fSL --progress-bar "$base_url/$file" -o "$models_dir/$file"; then
+      printf "\e[31mDownload failed for %s.\e[0m\n" "$file"
+      return 1
+    fi
+  done
+
+  printf "\n\e[34mDownloading voice styles (F1-F5, M1-M5)...\e[0m\n"
+  local name
+  for name in F1 F2 F3 F4 F5 M1 M2 M3 M4 M5; do
+    if ! curl -fSL --progress-bar "$base_url/voice_styles/$name.json" -o "$models_dir/voice_styles/$name.json"; then
+      printf "\e[31mDownload failed for voice style %s.\e[0m\n" "$name"
+      return 1
+    fi
+  done
+
+  printf "\e[32mSupertonic-3 models downloaded to %s\e[0m\n" "$models_dir"
+}
+
 download_stt_models() {
   local model_dir="$HOME/.local/share/neuropipe/stt/parakeet-v3"
   local vad_dir="$HOME/.local/share/neuropipe/stt"
@@ -738,6 +799,7 @@ run_build_flow() {
   if [[ "$selection" == "1" || "$selection" == "4" ]]; then
     handle_pocket_tts_voices
     handle_kokoro_models
+    handle_supertonic_models
   fi
 
   printf "\n\e[32mBuild and installation finished successfully.\e[0m\n"
@@ -818,6 +880,7 @@ run_prebuilt_flow() {
   if [[ "$selection" == "1" || "$selection" == "4" ]]; then
     handle_pocket_tts_voices
     handle_kokoro_models
+    handle_supertonic_models
   fi
 
   printf "\n\e[32mPrebuilt installation finished successfully.\e[0m\n"

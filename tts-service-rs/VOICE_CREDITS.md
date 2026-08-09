@@ -36,3 +36,17 @@ The Kokoro ONNX model and voice embeddings are from **[thewh1teagle/kokoro-onnx]
 
 - **kokoro-onnx** by thewh1teagle — https://github.com/thewh1teagle/kokoro-onnx
 - **Kokoro-82M** by hexgrad — https://huggingface.co/hexgrad/Kokoro-82M
+
+## Supertonic-3 TTS Model
+
+The Supertonic-3 ONNX model and voice styles are from **[Supertone](https://huggingface.co/Supertone/supertonic-3)**.
+
+| Component | License |
+|---|---|
+| model weights | OpenRAIL-M |
+| sample code / SDK | MIT |
+
+- **Supertonic-3** by Supertone — https://huggingface.co/Supertone/supertonic-3
+- Official MIT-licensed sample SDK: https://github.com/supertone-inc/supertonic
+
+The bundled voice styles (`F1`–`F5`, `M1`–`M5`) are extracted from Supertone's officially distributed demo audio for evaluation of the model and must not be used to impersonate any real person.

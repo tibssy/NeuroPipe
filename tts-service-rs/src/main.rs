@@ -5,6 +5,7 @@ mod service;
 use anyhow::Result;
 use engines::kokoro::Kokoro;
 use engines::pocket_tts::PocketTtsEngine;
+use engines::supertonic::SupertonicEngine;
 use engines::{Quality, TtsEngine};
 use std::env;
 use std::fs::File;
@@ -22,11 +23,12 @@ fn main() -> Result<()> {
     let text = args.next().unwrap_or_else(|| "Hello world!".to_string());
     let voice = args.next().unwrap_or_else(|| {
         if mode == "--pocket-tts" {
-            "alba"
+            "alba".to_string()
+        } else if mode == "--supertonic-3" {
+            "M3".to_string()
         } else {
-            "af_heart"
+            "af_heart".to_string()
         }
-        .to_string()
     });
     let quality = match args.next().as_deref() {
         Some("low") => Quality::Low,
@@ -34,16 +36,24 @@ fn main() -> Result<()> {
     };
     let output = args.next().unwrap_or_else(|| {
         if mode == "--pocket-tts" {
-            "pocket-tts-rust.wav"
+            "pocket-tts-rust.wav".to_string()
+        } else if mode == "--supertonic-3" {
+            "supertonic-3-rust.wav".to_string()
         } else {
-            "kokoro-rust.wav"
+            "kokoro-rust.wav".to_string()
         }
-        .to_string()
     });
 
     let (audio, sample_rate) = if mode == "--pocket-tts" {
         let mut engine = PocketTtsEngine::new(
             shellexpand("~/.local/share/neuropipe/models/pocket-tts"),
+            quality,
+        );
+        engine.load()?;
+        engine.synthesize(&text, &voice, 1.0)?
+    } else if mode == "--supertonic-3" {
+        let mut engine = SupertonicEngine::new(
+            shellexpand("~/.local/share/neuropipe/models/supertonic-3"),
             quality,
         );
         engine.load()?;

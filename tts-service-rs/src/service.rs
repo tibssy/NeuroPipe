@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::engines::kokoro::KokoroEngine;
 use crate::engines::pocket_tts::PocketTtsEngine;
+use crate::engines::supertonic::SupertonicEngine;
 use crate::engines::{split_sentences, Quality, TtsEngine};
 use anyhow::{anyhow, Result};
 use rodio::{buffer::SamplesBuffer, OutputStreamBuilder, Sink};
@@ -195,7 +196,7 @@ impl TtsService {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| self.config.tts.defaults.engine.clone());
-        if engine != "kokoro" && engine != "pocket-tts" {
+        if engine != "kokoro" && engine != "pocket-tts" && engine != "supertonic-3" {
             return json!({"status": "error", "message": "Unsupported Rust TTS engine"});
         }
         let text = match message.get("text").and_then(Value::as_str) {
@@ -294,6 +295,7 @@ impl TtsService {
         let mut engine: Box<dyn TtsEngine> = match engine_name {
             "kokoro" => Box::new(KokoroEngine::new(path, quality)),
             "pocket-tts" => Box::new(PocketTtsEngine::new(path, quality)),
+            "supertonic-3" => Box::new(SupertonicEngine::new(path, quality)),
             _ => return Err(anyhow!("unsupported Rust TTS engine '{engine_name}'")),
         };
         engine.load()?;
@@ -319,6 +321,7 @@ impl TtsService {
         let mut engine: Box<dyn TtsEngine> = match engine_name {
             "kokoro" => Box::new(KokoroEngine::new(model_path(engine_name), Quality::High)),
             "pocket-tts" => Box::new(PocketTtsEngine::new(model_path(engine_name), Quality::High)),
+            "supertonic-3" => Box::new(SupertonicEngine::new(model_path(engine_name), Quality::High)),
             _ => return Err(anyhow!("unsupported Rust TTS engine '{engine_name}'")),
         };
         engine.voices()
@@ -332,6 +335,16 @@ impl TtsService {
             let path = expand_path(voice);
             if !path.is_file() {
                 return Err(anyhow!("voice file not found: {}", path.display()));
+            }
+            return Ok(());
+        }
+        if voice.ends_with(".json") {
+            if engine_name != "supertonic-3" {
+                return Err(anyhow!("custom .json voice styles require supertonic-3"));
+            }
+            let path = expand_path(voice);
+            if !path.is_file() {
+                return Err(anyhow!("voice style file not found: {}", path.display()));
             }
             return Ok(());
         }
@@ -372,7 +385,7 @@ impl TtsService {
         if !matches!(quality.as_str(), "low" | "high") {
             return json!({"status": "error", "message": "Invalid quality"});
         }
-        if engine != "kokoro" && engine != "pocket-tts" {
+        if engine != "kokoro" && engine != "pocket-tts" && engine != "supertonic-3" {
             return json!({"status": "error", "message": "Unsupported Rust TTS engine"});
         }
         if !(0.5..=2.0).contains(&speed) {
@@ -392,6 +405,7 @@ impl TtsService {
 fn model_path(engine: &str) -> PathBuf {
     let suffix = match engine {
         "pocket-tts" => ".local/share/neuropipe/models/pocket-tts",
+        "supertonic-3" => ".local/share/neuropipe/models/supertonic-3",
         _ => ".local/share/neuropipe/models/kokoro",
     };
     std::env::var_os("HOME")

@@ -1,5 +1,6 @@
 pub mod kokoro;
 pub mod pocket_tts;
+pub mod supertonic;
 
 use anyhow::Result;
 

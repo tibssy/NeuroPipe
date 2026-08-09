@@ -47,6 +47,7 @@ idle_timeout_sec = 60
 # Empty list means cycle all available voices.
 kokoro = []
 pocket_tts = []
+supertonic_3 = []
 
 [assistant]
 default_model = "llama3.2:1b"
