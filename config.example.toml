@@ -42,6 +42,12 @@ speed = 1.0
 quality = "high"
 idle_timeout_sec = 60
 
+[tts.speeds]
+# Optional per-engine speed overrides. Unlisted engines use tts.defaults.speed.
+kokoro = 1.0
+pocket-tts = 1.0
+supertonic-3 = 1.0
+
 [tts.favorites]
 # Used by: neuro-ipc tts set-state --voice next|prev
 # Empty list means cycle all available voices.

@@ -157,6 +157,18 @@ impl TtsService {
         }
     }
 
+    fn active_speed_for(&self, engine: &str) -> f64 {
+        if let Some(speed) = self.config.tts.speeds.get(engine) {
+            return *speed;
+        }
+        let variant = engine.replace('-', "_");
+        self.config.tts
+            .speeds
+            .get(&variant)
+            .copied()
+            .unwrap_or(self.config.tts.defaults.speed)
+    }
+
     fn handle(&mut self, message: Value) -> Value {
         match message.get("command").and_then(Value::as_str) {
             Some("speak") => self.speak(&message),
@@ -176,7 +188,7 @@ impl TtsService {
             Some("get_state") => json!({
                 "engine": self.config.tts.defaults.engine,
                 "voice": self.config.tts.defaults.voice,
-                "speed": self.config.tts.defaults.speed,
+                "speed": self.active_speed_for(&self.config.tts.defaults.engine),
                 "quality": self.config.tts.defaults.quality,
                 "speaking": self.speaking.load(Ordering::SeqCst),
             }),
@@ -211,7 +223,7 @@ impl TtsService {
         let speed = message
             .get("speed")
             .and_then(Value::as_f64)
-            .unwrap_or(self.config.tts.defaults.speed as f64) as f32;
+            .unwrap_or_else(|| self.active_speed_for(&engine)) as f32;
         let quality = message
             .get("quality")
             .and_then(Value::as_str)
@@ -373,10 +385,7 @@ impl TtsService {
             .and_then(Value::as_str)
             .unwrap_or(&self.config.tts.defaults.voice)
             .to_string();
-        let speed = message
-            .get("speed")
-            .and_then(Value::as_f64)
-            .unwrap_or(self.config.tts.defaults.speed as f64) as f32;
+        let requested_speed = message.get("speed").and_then(Value::as_f64);
         let quality = message
             .get("quality")
             .and_then(Value::as_str)
@@ -388,17 +397,25 @@ impl TtsService {
         if engine != "kokoro" && engine != "pocket-tts" && engine != "supertonic-3" {
             return json!({"status": "error", "message": "Unsupported Rust TTS engine"});
         }
-        if !(0.5..=2.0).contains(&speed) {
-            return json!({"status": "error", "message": "Invalid speed"});
+        if let Some(speed) = requested_speed {
+            if !(0.5..=2.0).contains(&speed) {
+                return json!({"status": "error", "message": "Invalid speed"});
+            }
         }
         if let Err(error) = self.validate_voice(&engine, &voice) {
             return json!({"status": "error", "message": error.to_string()});
         }
+        let speed = match requested_speed {
+            Some(speed) => {
+                self.config.tts.speeds.insert(engine.clone(), speed);
+                speed
+            }
+            None => self.active_speed_for(&engine),
+        };
         self.config.tts.defaults.engine = engine;
         self.config.tts.defaults.voice = voice;
-        self.config.tts.defaults.speed = speed;
         self.config.tts.defaults.quality = quality;
-        json!({"status": "ok", "engine": self.config.tts.defaults.engine, "voice": self.config.tts.defaults.voice, "speed": self.config.tts.defaults.speed, "quality": self.config.tts.defaults.quality})
+        json!({"status": "ok", "engine": self.config.tts.defaults.engine, "voice": self.config.tts.defaults.voice, "speed": speed, "quality": self.config.tts.defaults.quality})
     }
 }
 

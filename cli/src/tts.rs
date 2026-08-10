@@ -125,10 +125,53 @@ fn cycle_voice(direction: &str, engine: Option<&str>) -> Option<String> {
     Some(voice_names[new_idx].clone())
 }
 
+const ENGINE_ORDER: [&str; 3] = ["kokoro", "pocket-tts", "supertonic-3"];
+
+fn cycle_engine(direction: &str) -> Option<(String, String)> {
+    let state = zmq_client::send_cmd(zmq_client::tts_cmd(), &json!({"command": "get_state"})).ok()?;
+    let current = state.get("engine").and_then(|v| v.as_str()).unwrap_or("kokoro");
+
+    let idx = ENGINE_ORDER.iter().position(|e| *e == current);
+    let new_idx = match (idx, direction) {
+        (Some(i), "next") => (i + 1) % ENGINE_ORDER.len(),
+        (Some(i), "prev") => (i + ENGINE_ORDER.len() - 1) % ENGINE_ORDER.len(),
+        (None, "next") | (None, "prev") => 0,
+        _ => return None,
+    };
+    let target = ENGINE_ORDER[new_idx];
+
+    let mut list_cmd = json!({"command": "list_voices"});
+    list_cmd["engine"] = json!(target);
+    let reply = zmq_client::send_cmd(zmq_client::tts_cmd(), &list_cmd).ok()?;
+    let first = reply
+        .get("voices")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str());
+    match first {
+        Some(voice) => Some((target.to_string(), voice.to_string())),
+        None => {
+            eprintln!("No voices available for engine '{}'.", target);
+            None
+        }
+    }
+}
+
 pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, quality: Option<&str>) {
+    let (resolved_engine, first_voice) = match engine {
+        Some("next") | Some("prev") => match cycle_engine(engine.unwrap()) {
+            Some((eng, first)) => {
+                eprintln!("Engine: {}", eng);
+                (Some(eng), Some(first))
+            }
+            None => return,
+        },
+        e => (e.map(|s| s.to_string()), None),
+    };
+
     let resolved_voice = match voice {
         Some("next") | Some("prev") => {
-            match cycle_voice(voice.unwrap(), engine) {
+            match cycle_voice(voice.unwrap(), resolved_engine.as_deref()) {
                 Some(v) => {
                     eprintln!("Voice: {}", v);
                     Some(v)
@@ -142,9 +185,18 @@ pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, 
         v => v.map(|s| s.to_string()),
     };
 
+    let final_voice = match (&resolved_voice, &first_voice) {
+        (Some(v), _) => Some(v.clone()),
+        (None, Some(v)) => {
+            eprintln!("Voice: {}", v);
+            Some(v.clone())
+        }
+        (None, None) => None,
+    };
+
     let mut cmd = json!({"command": "set_state"});
-    if let Some(v) = engine { cmd["engine"] = json!(v); }
-    if let Some(v) = &resolved_voice { cmd["voice"] = json!(v); }
+    if let Some(v) = &resolved_engine { cmd["engine"] = json!(v); }
+    if let Some(v) = &final_voice { cmd["voice"] = json!(v); }
     if let Some(s) = speed { cmd["speed"] = json!(s); }
     if let Some(q) = quality { cmd["quality"] = json!(q); }
     match zmq_client::send_cmd(zmq_client::tts_cmd(), &cmd) {
@@ -158,7 +210,7 @@ pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, 
 
                 match (engine, voice, speed, quality) {
                     (Some(engine), Some(voice), Some(speed), Some(quality)) => {
-                        if let Err(e) = config::persist_tts_defaults(engine, voice, speed, quality) {
+                        if let Err(e) = config::persist_tts_defaults(engine, voice, Some(speed), quality) {
                             eprintln!("Warning: state updated in service, but failed to persist config: {}", e);
                         }
                     }

@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -17,13 +18,15 @@ pub struct IpcConfig {
 #[derive(Debug, Deserialize)]
 pub struct TtsConfig {
     pub defaults: Defaults,
+    #[serde(default)]
+    pub speeds: HashMap<String, f64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Defaults {
     pub engine: String,
     pub voice: String,
-    pub speed: f32,
+    pub speed: f64,
     pub quality: String,
     pub idle_timeout_sec: u64,
 }
@@ -43,6 +46,7 @@ impl Default for Config {
                     quality: "high".to_string(),
                     idle_timeout_sec: 60,
                 },
+                speeds: HashMap::new(),
             },
         }
     }

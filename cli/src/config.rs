@@ -306,6 +306,25 @@ pub fn validate_document(cfg: &TomlValue) -> Result<(), String> {
         }
     }
 
+    if let Some(speeds_value) = tts.get("speeds") {
+        let speeds = speeds_value
+            .as_table()
+            .ok_or_else(|| "root.tts.speeds must be a table".to_string())?;
+        for (key, value) in speeds {
+            let normalized = key.replace('_', "-");
+            if !matches!(normalized.as_str(), "kokoro" | "pocket-tts" | "supertonic-3") {
+                return Err(format!("root.tts.speeds has unknown key '{key}'"));
+            }
+            let speed = value
+                .as_float()
+                .or_else(|| value.as_integer().map(|i| i as f64))
+                .ok_or_else(|| format!("root.tts.speeds.{key} must be a number"))?;
+            if !(0.5..=2.0).contains(&speed) {
+                return Err(format!("root.tts.speeds.{key} must be in [0.5, 2.0]"));
+            }
+        }
+    }
+
     let assistant = root
         .get("assistant")
         .and_then(|v| v.as_table())
@@ -550,15 +569,17 @@ fn save_config_doc(cfg: &TomlValue) -> Result<(), String> {
     write_atomic(&path, &text)
 }
 
-pub fn persist_tts_defaults(engine: &str, voice: &str, speed: f64, quality: &str) -> Result<(), String> {
+pub fn persist_tts_defaults(engine: &str, voice: &str, speed: Option<f64>, quality: &str) -> Result<(), String> {
     if !matches!(engine, "kokoro" | "pocket-tts" | "supertonic-3") {
         return Err(format!("Invalid engine '{}'.", engine));
     }
     if !matches!(quality, "low" | "high") {
         return Err(format!("Invalid quality '{}'.", quality));
     }
-    if !(0.5..=2.0).contains(&speed) {
-        return Err(format!("Invalid speed '{}'.", speed));
+    if let Some(speed) = speed {
+        if !(0.5..=2.0).contains(&speed) {
+            return Err(format!("Invalid speed '{}'.", speed));
+        }
     }
     if voice.trim().is_empty() {
         return Err("Voice must be non-empty.".to_string());
@@ -573,8 +594,12 @@ pub fn persist_tts_defaults(engine: &str, voice: &str, speed: f64, quality: &str
 
     defaults.insert("engine".to_string(), TomlValue::String(engine.to_string()));
     defaults.insert("voice".to_string(), TomlValue::String(voice.to_string()));
-    defaults.insert("speed".to_string(), TomlValue::Float(speed));
     defaults.insert("quality".to_string(), TomlValue::String(quality.to_string()));
+
+    if let Some(speed) = speed {
+        let speeds = ensure_table(tts, "speeds");
+        speeds.insert(engine.to_string(), TomlValue::Float(speed));
+    }
 
     save_config_doc(&cfg)
 }
