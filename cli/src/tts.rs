@@ -194,6 +194,8 @@ pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, 
         (None, None) => None,
     };
 
+    let speed_explicit = speed.is_some();
+
     let mut cmd = json!({"command": "set_state"});
     if let Some(v) = &resolved_engine { cmd["engine"] = json!(v); }
     if let Some(v) = &final_voice { cmd["voice"] = json!(v); }
@@ -210,7 +212,8 @@ pub fn set_state(engine: Option<&str>, voice: Option<&str>, speed: Option<f64>, 
 
                 match (engine, voice, speed, quality) {
                     (Some(engine), Some(voice), Some(speed), Some(quality)) => {
-                        if let Err(e) = config::persist_tts_defaults(engine, voice, Some(speed), quality) {
+                        let persist_speed = if speed_explicit { Some(speed) } else { None };
+                        if let Err(e) = config::persist_tts_defaults(engine, voice, persist_speed, quality) {
                             eprintln!("Warning: state updated in service, but failed to persist config: {}", e);
                         }
                     }

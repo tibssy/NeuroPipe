@@ -6,6 +6,7 @@ use crate::engines::{split_sentences, Quality, TtsEngine};
 use anyhow::{anyhow, Result};
 use rodio::{buffer::SamplesBuffer, OutputStreamBuilder, Sink};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -158,15 +159,7 @@ impl TtsService {
     }
 
     fn active_speed_for(&self, engine: &str) -> f64 {
-        if let Some(speed) = self.config.tts.speeds.get(engine) {
-            return *speed;
-        }
-        let variant = engine.replace('-', "_");
-        self.config.tts
-            .speeds
-            .get(&variant)
-            .copied()
-            .unwrap_or(self.config.tts.defaults.speed)
+        resolve_speed(&self.config.tts.speeds, engine, self.config.tts.defaults.speed)
     }
 
     fn handle(&mut self, message: Value) -> Value {
@@ -563,6 +556,17 @@ fn playback_loop(
     }
 }
 
+fn resolve_speed(speeds: &HashMap<String, f64>, engine: &str, fallback: f64) -> f64 {
+    if let Some(speed) = speeds.get(engine) {
+        return *speed;
+    }
+    let variant = engine.replace('-', "_");
+    speeds
+        .get(&variant)
+        .copied()
+        .unwrap_or(fallback)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,6 +592,18 @@ mod tests {
         fn synthesize(&mut self, text: &str, _voice: &str, _speed: f32) -> Result<(Vec<f32>, u32)> {
             Ok((vec![text.len() as f32], 24_000))
         }
+    }
+
+    #[test]
+    fn per_engine_speed_resolution() {
+        let mut speeds = HashMap::new();
+        speeds.insert("kokoro".to_string(), 1.3);
+        speeds.insert("pocket_tts".to_string(), 1.2);
+
+        assert_eq!(resolve_speed(&speeds, "kokoro", 1.0), 1.3);
+        assert_eq!(resolve_speed(&speeds, "pocket-tts", 1.0), 1.2);
+        assert_eq!(resolve_speed(&speeds, "pocket_tts", 1.0), 1.2);
+        assert_eq!(resolve_speed(&speeds, "supertonic-3", 1.0), 1.0);
     }
 
     #[test]
