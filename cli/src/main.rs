@@ -52,7 +52,7 @@ enum TtsAction {
         speed: Option<f64>,
         #[arg(long, value_parser = ["low", "high"])]
         quality: Option<String>,
-        #[arg(long, value_parser = ["kokoro", "pocket-tts"])]
+        #[arg(long, value_parser = ["kokoro", "pocket-tts", "supertonic-3"])]
         engine: Option<String>,
         #[arg(long)]
         no_monitor: bool,

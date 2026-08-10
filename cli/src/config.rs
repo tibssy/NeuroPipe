@@ -37,6 +37,7 @@ idle_timeout_sec = 60
 [tts.favorites]
 kokoro = []
 pocket_tts = []
+supertonic_3 = []
 
 [assistant]
 default_model = "llama3.2:1b"
@@ -251,8 +252,11 @@ pub fn validate_document(cfg: &TomlValue) -> Result<(), String> {
         .and_then(|v| v.as_table())
         .ok_or_else(|| "root.tts.defaults must be a table".to_string())?;
     let engine = require_string(defaults, "engine", "root.tts.defaults")?;
-    if !matches!(engine.as_str(), "kokoro" | "pocket-tts") {
-        return Err("root.tts.defaults.engine must be 'kokoro' or 'pocket-tts'".to_string());
+    if !matches!(engine.as_str(), "kokoro" | "pocket-tts" | "supertonic-3") {
+        return Err(
+            "root.tts.defaults.engine must be 'kokoro', 'pocket-tts', or 'supertonic-3'"
+                .to_string(),
+        );
     }
     let quality = require_string(defaults, "quality", "root.tts.defaults")?;
     if !matches!(quality.as_str(), "low" | "high") {
@@ -276,7 +280,12 @@ pub fn validate_document(cfg: &TomlValue) -> Result<(), String> {
             .as_table()
             .ok_or_else(|| "root.tts.favorites must be a table".to_string())?;
         for key in tts_favorites.keys() {
-            if key != "kokoro" && key != "pocket_tts" && key != "pocket-tts" {
+            if key != "kokoro"
+                && key != "pocket_tts"
+                && key != "pocket-tts"
+                && key != "supertonic_3"
+                && key != "supertonic-3"
+            {
                 return Err(format!("root.tts.favorites has unknown key '{key}'"));
             }
         }
@@ -288,6 +297,31 @@ pub fn validate_document(cfg: &TomlValue) -> Result<(), String> {
         }
         if tts_favorites.contains_key("pocket-tts") {
             let _ = require_string_array(tts_favorites, "pocket-tts", "root.tts.favorites")?;
+        }
+        if tts_favorites.contains_key("supertonic_3") {
+            let _ = require_string_array(tts_favorites, "supertonic_3", "root.tts.favorites")?;
+        }
+        if tts_favorites.contains_key("supertonic-3") {
+            let _ = require_string_array(tts_favorites, "supertonic-3", "root.tts.favorites")?;
+        }
+    }
+
+    if let Some(speeds_value) = tts.get("speeds") {
+        let speeds = speeds_value
+            .as_table()
+            .ok_or_else(|| "root.tts.speeds must be a table".to_string())?;
+        for (key, value) in speeds {
+            let normalized = key.replace('_', "-");
+            if !matches!(normalized.as_str(), "kokoro" | "pocket-tts" | "supertonic-3") {
+                return Err(format!("root.tts.speeds has unknown key '{key}'"));
+            }
+            let speed = value
+                .as_float()
+                .or_else(|| value.as_integer().map(|i| i as f64))
+                .ok_or_else(|| format!("root.tts.speeds.{key} must be a number"))?;
+            if !(0.5..=2.0).contains(&speed) {
+                return Err(format!("root.tts.speeds.{key} must be in [0.5, 2.0]"));
+            }
         }
     }
 
@@ -383,6 +417,7 @@ pub fn favorite_voices_for_engine(engine: &str) -> Result<Vec<String>, String> {
 
     let key = match engine {
         "pocket-tts" => "pocket_tts",
+        "supertonic-3" => "supertonic_3",
         other => other,
     };
 
@@ -409,6 +444,22 @@ pub fn favorite_voices_for_engine(engine: &str) -> Result<Vec<String>, String> {
                 };
                 if value.trim().is_empty() {
                     return Err(format!("root.tts.favorites.pocket-tts[{idx}] must be non-empty"));
+                }
+                out.push(value.to_string());
+            }
+            return Ok(out);
+        }
+    }
+
+    if key == "supertonic_3" {
+        if let Some(values) = favorites.get("supertonic-3").and_then(|v| v.as_array()) {
+            let mut out = Vec::with_capacity(values.len());
+            for (idx, item) in values.iter().enumerate() {
+                let Some(value) = item.as_str() else {
+                    return Err(format!("root.tts.favorites.supertonic-3[{idx}] must be a string"));
+                };
+                if value.trim().is_empty() {
+                    return Err(format!("root.tts.favorites.supertonic-3[{idx}] must be non-empty"));
                 }
                 out.push(value.to_string());
             }
@@ -518,15 +569,17 @@ fn save_config_doc(cfg: &TomlValue) -> Result<(), String> {
     write_atomic(&path, &text)
 }
 
-pub fn persist_tts_defaults(engine: &str, voice: &str, speed: f64, quality: &str) -> Result<(), String> {
-    if !matches!(engine, "kokoro" | "pocket-tts") {
+pub fn persist_tts_defaults(engine: &str, voice: &str, speed: Option<f64>, quality: &str) -> Result<(), String> {
+    if !matches!(engine, "kokoro" | "pocket-tts" | "supertonic-3") {
         return Err(format!("Invalid engine '{}'.", engine));
     }
     if !matches!(quality, "low" | "high") {
         return Err(format!("Invalid quality '{}'.", quality));
     }
-    if !(0.5..=2.0).contains(&speed) {
-        return Err(format!("Invalid speed '{}'.", speed));
+    if let Some(speed) = speed {
+        if !(0.5..=2.0).contains(&speed) {
+            return Err(format!("Invalid speed '{}'.", speed));
+        }
     }
     if voice.trim().is_empty() {
         return Err("Voice must be non-empty.".to_string());
@@ -541,8 +594,12 @@ pub fn persist_tts_defaults(engine: &str, voice: &str, speed: f64, quality: &str
 
     defaults.insert("engine".to_string(), TomlValue::String(engine.to_string()));
     defaults.insert("voice".to_string(), TomlValue::String(voice.to_string()));
-    defaults.insert("speed".to_string(), TomlValue::Float(speed));
     defaults.insert("quality".to_string(), TomlValue::String(quality.to_string()));
+
+    if let Some(speed) = speed {
+        let speeds = ensure_table(tts, "speeds");
+        speeds.insert(engine.to_string(), TomlValue::Float(speed));
+    }
 
     save_config_doc(&cfg)
 }

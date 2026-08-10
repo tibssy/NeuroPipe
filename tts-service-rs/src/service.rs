@@ -1,10 +1,12 @@
 use crate::config::Config;
 use crate::engines::kokoro::KokoroEngine;
 use crate::engines::pocket_tts::PocketTtsEngine;
+use crate::engines::supertonic::SupertonicEngine;
 use crate::engines::{split_sentences, Quality, TtsEngine};
 use anyhow::{anyhow, Result};
 use rodio::{buffer::SamplesBuffer, OutputStreamBuilder, Sink};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -156,6 +158,10 @@ impl TtsService {
         }
     }
 
+    fn active_speed_for(&self, engine: &str) -> f64 {
+        resolve_speed(&self.config.tts.speeds, engine, self.config.tts.defaults.speed)
+    }
+
     fn handle(&mut self, message: Value) -> Value {
         match message.get("command").and_then(Value::as_str) {
             Some("speak") => self.speak(&message),
@@ -175,7 +181,7 @@ impl TtsService {
             Some("get_state") => json!({
                 "engine": self.config.tts.defaults.engine,
                 "voice": self.config.tts.defaults.voice,
-                "speed": self.config.tts.defaults.speed,
+                "speed": self.active_speed_for(&self.config.tts.defaults.engine),
                 "quality": self.config.tts.defaults.quality,
                 "speaking": self.speaking.load(Ordering::SeqCst),
             }),
@@ -195,7 +201,7 @@ impl TtsService {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| self.config.tts.defaults.engine.clone());
-        if engine != "kokoro" && engine != "pocket-tts" {
+        if engine != "kokoro" && engine != "pocket-tts" && engine != "supertonic-3" {
             return json!({"status": "error", "message": "Unsupported Rust TTS engine"});
         }
         let text = match message.get("text").and_then(Value::as_str) {
@@ -210,7 +216,7 @@ impl TtsService {
         let speed = message
             .get("speed")
             .and_then(Value::as_f64)
-            .unwrap_or(self.config.tts.defaults.speed as f64) as f32;
+            .unwrap_or_else(|| self.active_speed_for(&engine)) as f32;
         let quality = message
             .get("quality")
             .and_then(Value::as_str)
@@ -294,6 +300,7 @@ impl TtsService {
         let mut engine: Box<dyn TtsEngine> = match engine_name {
             "kokoro" => Box::new(KokoroEngine::new(path, quality)),
             "pocket-tts" => Box::new(PocketTtsEngine::new(path, quality)),
+            "supertonic-3" => Box::new(SupertonicEngine::new(path, quality)),
             _ => return Err(anyhow!("unsupported Rust TTS engine '{engine_name}'")),
         };
         engine.load()?;
@@ -319,6 +326,7 @@ impl TtsService {
         let mut engine: Box<dyn TtsEngine> = match engine_name {
             "kokoro" => Box::new(KokoroEngine::new(model_path(engine_name), Quality::High)),
             "pocket-tts" => Box::new(PocketTtsEngine::new(model_path(engine_name), Quality::High)),
+            "supertonic-3" => Box::new(SupertonicEngine::new(model_path(engine_name), Quality::High)),
             _ => return Err(anyhow!("unsupported Rust TTS engine '{engine_name}'")),
         };
         engine.voices()
@@ -332,6 +340,16 @@ impl TtsService {
             let path = expand_path(voice);
             if !path.is_file() {
                 return Err(anyhow!("voice file not found: {}", path.display()));
+            }
+            return Ok(());
+        }
+        if voice.ends_with(".json") {
+            if engine_name != "supertonic-3" {
+                return Err(anyhow!("custom .json voice styles require supertonic-3"));
+            }
+            let path = expand_path(voice);
+            if !path.is_file() {
+                return Err(anyhow!("voice style file not found: {}", path.display()));
             }
             return Ok(());
         }
@@ -360,10 +378,7 @@ impl TtsService {
             .and_then(Value::as_str)
             .unwrap_or(&self.config.tts.defaults.voice)
             .to_string();
-        let speed = message
-            .get("speed")
-            .and_then(Value::as_f64)
-            .unwrap_or(self.config.tts.defaults.speed as f64) as f32;
+        let requested_speed = message.get("speed").and_then(Value::as_f64);
         let quality = message
             .get("quality")
             .and_then(Value::as_str)
@@ -372,26 +387,35 @@ impl TtsService {
         if !matches!(quality.as_str(), "low" | "high") {
             return json!({"status": "error", "message": "Invalid quality"});
         }
-        if engine != "kokoro" && engine != "pocket-tts" {
+        if engine != "kokoro" && engine != "pocket-tts" && engine != "supertonic-3" {
             return json!({"status": "error", "message": "Unsupported Rust TTS engine"});
         }
-        if !(0.5..=2.0).contains(&speed) {
-            return json!({"status": "error", "message": "Invalid speed"});
+        if let Some(speed) = requested_speed {
+            if !(0.5..=2.0).contains(&speed) {
+                return json!({"status": "error", "message": "Invalid speed"});
+            }
         }
         if let Err(error) = self.validate_voice(&engine, &voice) {
             return json!({"status": "error", "message": error.to_string()});
         }
+        let speed = match requested_speed {
+            Some(speed) => {
+                self.config.tts.speeds.insert(engine.clone(), speed);
+                speed
+            }
+            None => self.active_speed_for(&engine),
+        };
         self.config.tts.defaults.engine = engine;
         self.config.tts.defaults.voice = voice;
-        self.config.tts.defaults.speed = speed;
         self.config.tts.defaults.quality = quality;
-        json!({"status": "ok", "engine": self.config.tts.defaults.engine, "voice": self.config.tts.defaults.voice, "speed": self.config.tts.defaults.speed, "quality": self.config.tts.defaults.quality})
+        json!({"status": "ok", "engine": self.config.tts.defaults.engine, "voice": self.config.tts.defaults.voice, "speed": speed, "quality": self.config.tts.defaults.quality})
     }
 }
 
 fn model_path(engine: &str) -> PathBuf {
     let suffix = match engine {
         "pocket-tts" => ".local/share/neuropipe/models/pocket-tts",
+        "supertonic-3" => ".local/share/neuropipe/models/supertonic-3",
         _ => ".local/share/neuropipe/models/kokoro",
     };
     std::env::var_os("HOME")
@@ -532,6 +556,17 @@ fn playback_loop(
     }
 }
 
+fn resolve_speed(speeds: &HashMap<String, f64>, engine: &str, fallback: f64) -> f64 {
+    if let Some(speed) = speeds.get(engine) {
+        return *speed;
+    }
+    let variant = engine.replace('-', "_");
+    speeds
+        .get(&variant)
+        .copied()
+        .unwrap_or(fallback)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,6 +592,18 @@ mod tests {
         fn synthesize(&mut self, text: &str, _voice: &str, _speed: f32) -> Result<(Vec<f32>, u32)> {
             Ok((vec![text.len() as f32], 24_000))
         }
+    }
+
+    #[test]
+    fn per_engine_speed_resolution() {
+        let mut speeds = HashMap::new();
+        speeds.insert("kokoro".to_string(), 1.3);
+        speeds.insert("pocket_tts".to_string(), 1.2);
+
+        assert_eq!(resolve_speed(&speeds, "kokoro", 1.0), 1.3);
+        assert_eq!(resolve_speed(&speeds, "pocket-tts", 1.0), 1.2);
+        assert_eq!(resolve_speed(&speeds, "pocket_tts", 1.0), 1.2);
+        assert_eq!(resolve_speed(&speeds, "supertonic-3", 1.0), 1.0);
     }
 
     #[test]
