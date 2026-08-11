@@ -72,6 +72,7 @@ tool_usage_policy = ""
 open_url = "ask"
 screenshot = "ask"
 web_search = "ask"
+media_control = "allow"
 "#;
 
 fn config_path() -> PathBuf {

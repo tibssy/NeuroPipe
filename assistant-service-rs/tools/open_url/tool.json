@@ -1,6 +1,6 @@
 {
   "name": "open_url",
-  "description": "Open a URL in the default web browser. Use when the user asks to open a link, visit a website, or look at a specific page.",
+  "description": "Open a URL. Website links open in the default web browser. Video or audio links (YouTube, Vimeo, Dailymotion, mp4/webm/mp3 files) are played with mpv, which starts playback immediately and can then be controlled with media_control. Use this when the user names a link, video, or site to open.",
   "version": 1,
   "parameters": {
     "type": "object",

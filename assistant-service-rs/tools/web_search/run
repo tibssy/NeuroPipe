@@ -48,7 +48,10 @@ def main():
             url = r.get("href", "").strip()
             body = r.get("body", "").strip()
             lines.append(f"\n{i}. {title}")
-            lines.append(f"   {body[:250]}")
+            if url:
+                lines.append(f"   URL: {url}")
+            if body:
+                lines.append(f"   {body[:250]}")
 
         print(json.dumps({"success": True, "result": "\n".join(lines)}))
     except Exception as e:

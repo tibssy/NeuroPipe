@@ -100,3 +100,4 @@ Do not ask the user to type permission commands.
 open_url = "ask"
 screenshot = "ask"
 web_search = "ask"
+media_control = "allow"

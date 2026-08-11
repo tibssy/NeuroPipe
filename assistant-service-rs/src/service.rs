@@ -715,9 +715,8 @@ impl Shared {
         let mut executed_tools: HashSet<(String, String)> = HashSet::new();
 
         for round_num in 0..MAX_TOOL_ROUNDS {
-            let round_tools = if round_num == 0 { tools.as_deref() } else { None };
             let result = self.stream_and_speak(
-                round_tools,
+                tools.as_deref(),
                 if round_num == 0 { memory_context.as_deref() } else { None },
             );
             let (called, spoken) = match result {

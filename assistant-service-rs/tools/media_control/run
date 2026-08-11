@@ -1,0 +1,133 @@
+#!/bin/bash
+
+PARAMS="$1"
+if [[ -z "$PARAMS" ]]; then
+  PARAMS=$(cat)
+fi
+
+ACTION=$(echo "$PARAMS" | python3 -c "import sys,json; print((json.load(sys.stdin).get('action') or '').strip())" 2>/dev/null)
+VALUE=$(echo "$PARAMS" | python3 -c "import sys,json; v=json.load(sys.stdin).get('value'); print(str(v).strip() if v is not None else '')" 2>/dev/null)
+
+if ! command -v playerctl &>/dev/null; then
+  echo '{"success": false, "error": "playerctl not installed. Install playerctl to use media control."}'
+  exit 0
+fi
+
+player_cmd() {
+  playerctl "$@" 2>&1
+}
+
+no_player() {
+  echo "$1" | grep -qi "no players found"
+}
+
+# Wait up to N seconds for an MPRIS player to appear.
+wait_for_player() {
+  local tries=0
+  while (( tries < "$1" )); do
+    if ! no_player "$(playerctl -l 2>&1)"; then
+      return 0
+    fi
+    (( tries++ ))
+    sleep 1
+  done
+  return 1
+}
+
+case "$ACTION" in
+  status)
+    META=$(player_cmd metadata --format "{{artist}} — {{title}} ({{album}})" 2>&1)
+    if no_player "$META"; then
+      echo '{"success": false, "error": "No media players found"}'
+      exit 0
+    fi
+    STATUS=$(player_cmd status 2>&1)
+    VOLUME=$(player_cmd volume 2>&1)
+    POSITION=$(player_cmd position 2>&1)
+    RESULT="Now playing: $META"
+    if [[ -n "$STATUS" ]]; then RESULT="Status: $STATUS | $RESULT"; fi
+    if [[ -n "$VOLUME" ]]; then RESULT="$RESULT | Volume: $VOLUME"; fi
+    if [[ -n "$POSITION" ]]; then RESULT="$RESULT | Position: ${POSITION}s"; fi
+    echo "{\"success\": true, \"result\": \"$(echo "$RESULT" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}"
+    ;;
+  play|pause|play-pause|next|previous|stop)
+    if [[ "$ACTION" == "play" ]]; then
+      wait_for_player 3 || {
+        echo '{"success": false, "error": "No media players found"}'
+        exit 0
+      }
+    fi
+    OUT=$(player_cmd "$ACTION" 2>&1)
+    if no_player "$OUT"; then
+      echo '{"success": false, "error": "No media players found"}'
+      exit 0
+    fi
+    if echo "$OUT" | grep -qi "could not\|no player could handle"; then
+      echo "{\"success\": false, \"error\": \"$(echo "$OUT" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}"
+      exit 0
+    fi
+    echo "{\"success\": true, \"result\": \"$(echo "$ACTION" | tr '-' ' ')\"}"
+    ;;
+  seek)
+    if [[ -z "$VALUE" ]]; then
+      echo '{"success": false, "error": "Seek requires a value like +10 or -5"}'
+      exit 0
+    fi
+    OUT=$(player_cmd position "$VALUE" 2>&1)
+    if no_player "$OUT"; then
+      echo '{"success": false, "error": "No media players found"}'
+      exit 0
+    fi
+    echo "{\"success\": true, \"result\": \"$(echo "Seek ${VALUE}s" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}"
+    ;;
+  volume)
+    if [[ -n "$VALUE" ]]; then
+      OUT=$(player_cmd volume "$VALUE" 2>&1)
+      if no_player "$OUT"; then
+        echo '{"success": false, "error": "No media players found"}'
+        exit 0
+      fi
+      echo "{\"success\": true, \"result\": \"$(echo "Volume set to $VALUE" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}"
+    else
+      OUT=$(player_cmd volume 2>&1)
+      if no_player "$OUT"; then
+        echo '{"success": false, "error": "No media players found"}'
+        exit 0
+      fi
+      echo "{\"success\": true, \"result\": \"$(echo "Volume: $OUT" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}"
+    fi
+    ;;
+  volume_up|volume_down)
+    STEP=${VALUE:-0.05}
+    SIGN="+"
+    [[ "$ACTION" == "volume_down" ]] && SIGN="-"
+    OUT=$(player_cmd volume "${STEP}${SIGN}" 2>&1)
+    if no_player "$OUT"; then
+      echo '{"success": false, "error": "No media players found"}'
+      exit 0
+    fi
+    NEW_VOLUME=$(player_cmd volume 2>&1)
+    DIR="up"
+    [[ "$ACTION" == "volume_down" ]] && DIR="down"
+    echo "{\"success\": true, \"result\": \"$(echo "Volume ${DIR}, now ${NEW_VOLUME}" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}"
+    ;;
+  loop|shuffle)
+    if [[ -n "$VALUE" ]]; then
+      OUT=$(player_cmd "$ACTION" "$VALUE" 2>&1)
+    else
+      OUT=$(player_cmd "$ACTION" 2>&1)
+    fi
+    if no_player "$OUT"; then
+      echo '{"success": false, "error": "No media players found"}'
+      exit 0
+    fi
+    if echo "$OUT" | grep -qi "could not\|no player could handle"; then
+      echo "{\"success\": false, \"error\": \"$(echo "$OUT" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}"
+      exit 0
+    fi
+    echo "{\"success\": true, \"result\": \"$(echo "$ACTION: $OUT" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}"
+    ;;
+  *)
+    echo '{"success": false, "error": "Unknown action. Valid actions: status, play, pause, play-pause, next, previous, stop, seek, volume, volume_up, volume_down, loop, shuffle"}'
+    ;;
+esac

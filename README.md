@@ -33,6 +33,7 @@ Build dependencies checked for source installs:
 Assistant dependency:
 
 - [Ollama](https://ollama.com) installed and running, with your target model pulled
+- `mpv` + [mpv-mpris](https://github.com/hoyon/mpv-mpris) + `yt-dlp` — used by the `open_url` tool to play video/audio links (YouTube, Vimeo, direct media files) via MPRIS so `media_control` can control them
 
 ### 1. Clone the repository
 ```bash

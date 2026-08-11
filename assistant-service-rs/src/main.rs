@@ -104,7 +104,6 @@ fn handle_cmd(shared: &Arc<Shared>, cmd: &Value) -> Value {
                     *shared.model.lock().unwrap() = m.trim().to_string();
                 }
             }
-            service::notify("NeuroPipe Assistant", &format!("Model: {}", shared.model.lock().unwrap().clone()));
             json!({"model": shared.model.lock().unwrap().clone()})
         }
         "list_tools" => {
