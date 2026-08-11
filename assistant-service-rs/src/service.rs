@@ -127,6 +127,8 @@ pub struct Shared {
     memory: MemoryStore,
     pub ollama: OllamaClient,
     pub tts_events: Arc<TtsEvents>,
+    /// Player name and the volume it was set to before ducking. None = not ducked.
+    duck_state: Mutex<Option<(String, f32)>>,
 }
 
 pub fn notify(title: &str, body: &str) {
@@ -161,6 +163,7 @@ impl Shared {
             pending_sentences: Mutex::new(0),
             last_activity: Mutex::new(Instant::now()),
             last_memory_digest: Mutex::new(None),
+            duck_state: Mutex::new(None),
         }
     }
 
@@ -295,6 +298,47 @@ pub fn start_tts_event_listener(shared: &Arc<Shared>) {
 
 fn is_cloud_model(model: &str) -> bool {
     model.ends_with(":cloud")
+}
+
+// ---------- media ducking helpers ----------
+
+/// Name of the first MPRIS player that is currently Playing, if any.
+fn first_playing_player() -> Option<String> {
+    let list = Command::new("playerctl").arg("-l").output().ok()?;
+    let text = String::from_utf8_lossy(&list.stdout);
+    for line in text.lines() {
+        let player = line.trim();
+        if player.is_empty() {
+            continue;
+        }
+        let Ok(out) = Command::new("playerctl")
+            .args(["-p", player, "status"])
+            .output()
+        else {
+            continue;
+        };
+        if String::from_utf8_lossy(&out.stdout).trim().eq_ignore_ascii_case("playing") {
+            return Some(player.to_string());
+        }
+    }
+    None
+}
+
+fn playerctl_volume(player: &str) -> Option<f32> {
+    let out = Command::new("playerctl")
+        .args(["-p", player, "volume"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<f32>()
+        .ok()
+}
+
+fn playerctl_set_volume(player: &str, volume: f32) {
+    let _ = Command::new("playerctl")
+        .args(["-p", player, "volume", &volume.to_string()])
+        .output();
 }
 
 /// Current local time as a compact human-readable string, e.g. "Tue 2026-08-09 14:32".
@@ -482,6 +526,36 @@ impl Shared {
     fn set_stt_mode(&self, mode: &str) {
         let addr = self.cfg.ipc.stt_cmd.clone();
         stt_set_mode(&addr, mode);
+    }
+
+    /// Lower the volume of the currently playing media player so the assistant
+    /// can hear the user speak over it. No-op when ducking is disabled, no
+    /// player is running, or media is already ducked.
+    pub fn duck_media(&self) {
+        if !self.cfg.assistant.duck_media {
+            return;
+        }
+        let mut state = self.duck_state.lock().unwrap();
+        if state.is_some() {
+            return;
+        }
+        let Some(player) = first_playing_player() else {
+            return;
+        };
+        let volume = playerctl_volume(&player);
+        if volume.is_none() {
+            return;
+        }
+        playerctl_set_volume(&player, self.cfg.assistant.duck_volume);
+        *state = Some((player, volume.unwrap()));
+    }
+
+    /// Restore the media volume that was saved by `duck_media`.
+    pub fn unduck_media(&self) {
+        let mut state = self.duck_state.lock().unwrap();
+        if let Some((player, volume)) = state.take() {
+            playerctl_set_volume(&player, volume);
+        }
     }
 
     fn unload_other_models(&self, keep: &str) {
@@ -810,6 +884,7 @@ impl Shared {
         }
         self.cancel.store(true, Ordering::SeqCst);
         let _ = self.stop_tts();
+        self.unduck_media();
         if self.is_busy() {
             let _ = self.interrupt();
         }
@@ -903,5 +978,66 @@ impl Shared {
         *self.mode.lock().unwrap() = mode.to_string();
         self.set_stt_mode("VAD");
         notify("NeuroPipe", "Listening");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> Config {
+        let mut cfg = Config::load();
+        cfg.assistant.duck_media = true;
+        cfg.assistant.duck_volume = 0.1;
+        cfg
+    }
+
+    /// Requires an MPRIS player actually playing (e.g. `mpv`). Skips when
+    /// playerctl is missing or no player is running.
+    fn playing_player() -> Option<String> {
+        if !first_playing_player().is_some() {
+            return None;
+        }
+        first_playing_player()
+    }
+
+    #[test]
+    fn duck_then_unduck_restores_volume() {
+        let Some(player) = playing_player() else {
+            eprintln!("skipping: no playing MPRIS player available");
+            return;
+        };
+        let original = playerctl_volume(&player).unwrap_or(1.0);
+        let shared = Shared::new(test_config());
+        shared.duck_media();
+        let ducked = playerctl_volume(&player).unwrap_or(-1.0);
+        assert!(
+            (ducked - 0.1).abs() < 0.01,
+            "expected ducked volume 0.1, got {ducked}"
+        );
+        shared.unduck_media();
+        let restored = playerctl_volume(&player).unwrap_or(-1.0);
+        assert!(
+            (restored - original).abs() < 0.01,
+            "expected restored volume {original}, got {restored}"
+        );
+    }
+
+    #[test]
+    fn duck_is_idempotent_until_unduck() {
+        let Some(player) = playing_player() else {
+            eprintln!("skipping: no playing MPRIS player available");
+            return;
+        };
+        let original = playerctl_volume(&player).unwrap_or(1.0);
+        let shared = Shared::new(test_config());
+        shared.duck_media();
+        shared.duck_media();
+        let ducked = playerctl_volume(&player).unwrap_or(-1.0);
+        assert!((ducked - 0.1).abs() < 0.01);
+        shared.unduck_media();
+        shared.unduck_media();
+        let restored = playerctl_volume(&player).unwrap_or(-1.0);
+        assert!((restored - original).abs() < 0.01);
     }
 }

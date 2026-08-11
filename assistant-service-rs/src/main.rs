@@ -206,6 +206,9 @@ fn stt_loop(shared: &Arc<Shared>) {
                         print!(".");
                         use std::io::Write;
                         let _ = std::io::stdout().flush();
+                        // Duck media while the user is speaking so the assistant
+                        // can hear them over a playing video or song.
+                        shared.duck_media();
                         // Instant barge-in: in MODE2, stop TTS the moment speech
                         // onset is detected, rather than after the full
                         // transcription arrives. MODE1 stays half-duplex.
@@ -220,6 +223,10 @@ fn stt_loop(shared: &Arc<Shared>) {
                         }
                         let sh = Arc::clone(shared);
                         std::thread::spawn(move || sh.warm_tts());
+                    }
+                    "listening_end" => {
+                        // Speech finished; bring the media volume back up.
+                        shared.unduck_media();
                     }
                     _ => {}
                 }

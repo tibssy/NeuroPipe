@@ -59,6 +59,11 @@ supertonic_3 = []
 default_model = "llama3.2:1b"
 history_idle_timeout_sec = 3600
 
+# Duck (lower) media playback volume while the user is speaking, so the
+# assistant can hear the user over a playing video or song.
+duck_media = true
+duck_volume = 0.1
+
 [assistant.favorites]
 # Used by: neuro-ipc assistant set-model next|prev
 # Empty list means cycle all available models.
