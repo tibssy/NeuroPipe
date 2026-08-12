@@ -127,8 +127,9 @@ pub struct Shared {
     memory: MemoryStore,
     pub ollama: OllamaClient,
     pub tts_events: Arc<TtsEvents>,
-    /// Player name and the volume it was set to before ducking. None = not ducked.
-    duck_state: Mutex<Option<(String, f32)>>,
+    /// Player name, the volume it was set to before ducking, and the number of
+    /// active duck reasons (VAD listening + TTS speaking). None = not ducked.
+    duck_state: Mutex<Option<(String, f32, usize)>>,
 }
 
 pub fn notify(title: &str, body: &str) {
@@ -276,6 +277,7 @@ fn tts_sub(addr: &str) -> Option<zmq::Socket> {
 
 pub fn start_tts_event_listener(shared: &Arc<Shared>) {
     let events = Arc::clone(&shared.tts_events);
+    let shared = Arc::clone(shared);
     let addr = shared.cfg.ipc.tts_events.clone();
     thread::spawn(move || loop {
         let Some(socket) = tts_sub(&addr) else {
@@ -286,7 +288,19 @@ pub fn start_tts_event_listener(shared: &Arc<Shared>) {
             match socket.recv_bytes(0) {
                 Ok(bytes) => {
                     if let Ok(message) = serde_json::from_slice::<Value>(&bytes) {
+                        let was_speaking = events.is_speaking();
                         events.record(&message);
+                        // Duck while the assistant's TTS is audible so it can be
+                        // heard over any playing media; restore when it stops.
+                        let is_speaking = events.is_speaking();
+                        let event = message.get("event").and_then(Value::as_str).unwrap_or("");
+                        match event {
+                            "speaking" if !was_speaking => shared.duck_media(),
+                            "sentence_done" | "interrupted" if was_speaking && !is_speaking => {
+                                shared.unduck_media();
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 Err(_) => break,
@@ -529,14 +543,17 @@ impl Shared {
     }
 
     /// Lower the volume of the currently playing media player so the assistant
-    /// can hear the user speak over it. No-op when ducking is disabled, no
-    /// player is running, or media is already ducked.
+    /// can hear the user speak over it, or the user can hear the assistant's
+    /// TTS over it. No-op when ducking is disabled or no player is running.
+    /// Multiple callers (VAD listening + TTS speaking) each add a duck reason;
+    /// the volume is only restored once all reasons are gone.
     pub fn duck_media(&self) {
         if !self.cfg.assistant.duck_media {
             return;
         }
         let mut state = self.duck_state.lock().unwrap();
-        if state.is_some() {
+        if let Some((_, _, count)) = state.as_mut() {
+            *count += 1;
             return;
         }
         let Some(player) = first_playing_player() else {
@@ -547,13 +564,28 @@ impl Shared {
             return;
         }
         playerctl_set_volume(&player, self.cfg.assistant.duck_volume);
-        *state = Some((player, volume.unwrap()));
+        *state = Some((player, volume.unwrap(), 1));
     }
 
-    /// Restore the media volume that was saved by `duck_media`.
+    /// Drop one duck reason; restore the media volume when none remain.
     pub fn unduck_media(&self) {
         let mut state = self.duck_state.lock().unwrap();
-        if let Some((player, volume)) = state.take() {
+        if let Some((_, _, count)) = state.as_mut() {
+            if *count > 1 {
+                *count -= 1;
+                return;
+            }
+        }
+        if let Some((player, volume, _)) = state.take() {
+            playerctl_set_volume(&player, volume);
+        }
+    }
+
+    /// Restore the media volume unconditionally (used on session stop), no
+    /// matter how many duck reasons were active.
+    pub fn force_unduck_media(&self) {
+        let mut state = self.duck_state.lock().unwrap();
+        if let Some((player, volume, _)) = state.take() {
             playerctl_set_volume(&player, volume);
         }
     }
@@ -884,7 +916,7 @@ impl Shared {
         }
         self.cancel.store(true, Ordering::SeqCst);
         let _ = self.stop_tts();
-        self.unduck_media();
+        self.force_unduck_media();
         if self.is_busy() {
             let _ = self.interrupt();
         }
@@ -995,49 +1027,52 @@ mod tests {
     /// Requires an MPRIS player actually playing (e.g. `mpv`). Skips when
     /// playerctl is missing or no player is running.
     fn playing_player() -> Option<String> {
-        if !first_playing_player().is_some() {
-            return None;
-        }
         first_playing_player()
     }
 
+    /// All ducking assertions share one real media player, so they must run
+    /// in a single test body (not separate parallel tests) to avoid racing
+    /// each other over the volume.
     #[test]
-    fn duck_then_unduck_restores_volume() {
+    fn duck_refcount_round_trip_and_force_unduck() {
         let Some(player) = playing_player() else {
             eprintln!("skipping: no playing MPRIS player available");
             return;
         };
         let original = playerctl_volume(&player).unwrap_or(1.0);
         let shared = Shared::new(test_config());
+
         shared.duck_media();
         let ducked = playerctl_volume(&player).unwrap_or(-1.0);
         assert!(
             (ducked - 0.1).abs() < 0.01,
             "expected ducked volume 0.1, got {ducked}"
         );
+
+        // A second duck reason keeps it ducked through the first unduck.
+        shared.duck_media();
+        shared.unduck_media();
+        let still_ducked = playerctl_volume(&player).unwrap_or(-1.0);
+        assert!(
+            (still_ducked - 0.1).abs() < 0.01,
+            "expected still ducked 0.1, got {still_ducked}"
+        );
+
         shared.unduck_media();
         let restored = playerctl_volume(&player).unwrap_or(-1.0);
         assert!(
             (restored - original).abs() < 0.01,
             "expected restored volume {original}, got {restored}"
         );
-    }
 
-    #[test]
-    fn duck_is_idempotent_until_unduck() {
-        let Some(player) = playing_player() else {
-            eprintln!("skipping: no playing MPRIS player available");
-            return;
-        };
-        let original = playerctl_volume(&player).unwrap_or(1.0);
-        let shared = Shared::new(test_config());
+        // force_unduck clears all reasons at once (as on session stop).
         shared.duck_media();
         shared.duck_media();
-        let ducked = playerctl_volume(&player).unwrap_or(-1.0);
-        assert!((ducked - 0.1).abs() < 0.01);
-        shared.unduck_media();
-        shared.unduck_media();
-        let restored = playerctl_volume(&player).unwrap_or(-1.0);
-        assert!((restored - original).abs() < 0.01);
+        shared.force_unduck_media();
+        let forced_restored = playerctl_volume(&player).unwrap_or(-1.0);
+        assert!(
+            (forced_restored - original).abs() < 0.01,
+            "expected restored volume {original}, got {forced_restored}"
+        );
     }
 }

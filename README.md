@@ -134,9 +134,10 @@ Optional favorites in config can constrain cycling:
 Media ducking (assistant):
 
 - `assistant.duck_media` (`true`/`false`) — lower the media player volume while the
-  user is speaking, so the assistant can hear voice input over a playing video or song.
+  user is speaking or while the assistant's TTS is talking, so voice input can be
+  heard over a playing video or song.
 - `assistant.duck_volume` (0.0–1.0, default `0.1`) — the volume ducked media drops to.
-  Requires `playerctl`. Volume is restored when the utterance ends or the session stops.
+  Requires `playerctl`. Volume is restored when the utterance/TTS finishes or the session stops.
 
 The installer seeds `~/.config/neuropipe/config.toml` from `config.example.toml` if the config file does not already exist.
 
