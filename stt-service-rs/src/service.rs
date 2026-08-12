@@ -661,7 +661,7 @@ mod tests {
         let mut rec = Recording::new();
         rec.start();
         rec.push(&tail_glide(440.0, 160.0));
-        rec.silence_ms = 100; // below turn_hold_ms (250)
+        rec.silence_ms = 100; // below turn_hold_ms (900)
         assert!(!svc.should_end_turn(&mut rec, 0.0));
     }
 
@@ -681,7 +681,7 @@ mod tests {
         let mut rec = Recording::new();
         rec.start();
         rec.push(&tail_glide(220.0, 220.0)); // flat => continuation
-        rec.silence_ms = 700;
+        rec.silence_ms = 1000;
         assert!(!svc.should_end_turn(&mut rec, 0.0));
     }
 
@@ -691,7 +691,7 @@ mod tests {
         let mut rec = Recording::new();
         rec.start();
         rec.push(&tail_glide(440.0, 160.0)); // falling => terminal
-        rec.silence_ms = 700;
+        rec.silence_ms = 1000; // past turn_hold_ms (900), falling contour ends
         assert!(svc.should_end_turn(&mut rec, 0.0));
     }
 
@@ -725,9 +725,9 @@ mod tests {
         let mut rec = Recording::new();
         rec.start();
         rec.push(&tail_glide(440.0, 160.0));
-        rec.silence_ms = 600;
+        rec.silence_ms = 1000;
         assert!(svc.should_end_turn(&mut rec, 0.0)); // first score fires
-        rec.silence_ms = 632; // only 32ms later, under cadence (400)
+        rec.silence_ms = 1032; // only 32ms later, under cadence (500)
         assert!(!svc.should_end_turn(&mut rec, 0.0));
     }
 
@@ -749,7 +749,7 @@ mod tests {
             turn_hard_ceiling_ms: 3500,
             turn_detector: "heuristic".into(),
             smart_turn_model_path: "smart_turn_v3.2_cpu.onnx".into(),
-            smart_turn_min_utterance_ms: 400,
+            smart_turn_min_utterance_ms: 1200,
         };
         let config = crate::config::Config {
             ipc: crate::config::IpcConfig {

@@ -61,7 +61,7 @@ impl SmartTurnEngine {
         let window = hann_window();
         Ok(Self {
             session,
-            min_utterance_ms: 400,
+            min_utterance_ms: 1200,
             mel_filters,
             window,
         })

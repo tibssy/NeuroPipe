@@ -63,13 +63,13 @@ impl Default for Config {
                 silence_timeout_sec: 1.0,
                 model_idle_timeout_sec: 60,
                 turn_end_enabled: true,
-                turn_hold_ms: 250,
+                turn_hold_ms: 900,
                 turn_end_threshold: 0.5,
-                turn_score_cadence_ms: 400,
+                turn_score_cadence_ms: 500,
                 turn_hard_ceiling_ms: 3500,
                 turn_detector: "smart_turn".to_string(),
                 smart_turn_model_path: "~/.local/share/neuropipe/stt/smart_turn_v3.2_cpu.onnx".to_string(),
-                smart_turn_min_utterance_ms: 400,
+                smart_turn_min_utterance_ms: 1200,
             },
         }
     }
