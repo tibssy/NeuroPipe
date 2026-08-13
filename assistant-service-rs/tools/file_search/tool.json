@@ -1,0 +1,29 @@
+{
+  "name": "file_search",
+  "description": "Find files inside the user's configured search folders (defaults: Downloads, Documents, Videos, Music, Pictures) by name/extension or by recency, then optionally open one with the default application. Use when the user asks to find, locate, look for, or open a file (a document, PDF, image, audio, video, script...).",
+  "version": 1,
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["search", "recent", "open"],
+        "description": "'search' finds files by name/extension within the search folders; 'recent' lists recently modified files; 'open' opens a given file path with the default application"
+      },
+      "pattern": {
+        "type": "string",
+        "description": "For 'search': a substring of the file name, or an extension filter like '.pdf' (case-insensitive)"
+      },
+      "path": {
+        "type": "string",
+        "description": "For 'open': the absolute path of the file to open (must be inside a configured search folder)"
+      },
+      "limit": {
+        "type": "integer",
+        "description": "Maximum number of results (default 10, max 20)"
+      }
+    },
+    "required": ["action"]
+  },
+  "default_permission": "ask"
+}

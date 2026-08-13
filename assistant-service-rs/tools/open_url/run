@@ -1,20 +1,57 @@
 #!/bin/bash
-set -e
 
 PARAMS="$1"
-URL=$(echo "$PARAMS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('url',''))" 2>/dev/null)
+if [[ -z "$PARAMS" ]]; then
+  PARAMS=$(cat)
+fi
+
+URL=$(echo "$PARAMS" | python3 -c "import sys,json; print((json.load(sys.stdin).get('url') or '').strip())" 2>/dev/null)
+
+# Language models often append punctuation or wrap the URL in quotes.
+URL=$(echo "$URL" | sed -E 's/[.,;:!?]+$//; s/["\047]$//; s/^["\047]//')
 
 if [[ -z "$URL" ]]; then
   echo '{"success": false, "error": "No URL provided"}'
   exit 0
 fi
 
+is_video() {
+  local u="$1"
+  case "$u" in
+    *youtube.com/watch*|*youtu.be/*|*youtube.com/shorts*|*vimeo.com/*|*dailymotion.com/video*)
+      return 0
+      ;;
+    *.*.mp4|*.webm|*.mkv|*.mov|*.m4v|*.mp3|*.flac|*.ogg|*.opus|*.m3u8)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# Video URLs are played with mpv. It starts playback immediately and, via the
+# mpv-mpris plugin, registers an MPRIS player so media_control can control it.
+# This works on any compositor/DE, unlike browser autoplay tricks.
+if is_video "$URL"; then
+  if command -v mpv &>/dev/null; then
+    nohup setsid mpv --no-terminal "$URL" >/dev/null 2>&1 &
+    echo "{\"success\": true, \"result\": \"Playing $URL with mpv\"}"
+    exit 0
+  fi
+  echo '{"success": false, "error": "mpv is not installed. Install mpv and mpv-mpris to play video links."}'
+  exit 0
+fi
+
 if command -v xdg-open &>/dev/null; then
-  xdg-open "$URL" 2>/dev/null
-  echo "{\"success\": true, \"result\": \"Opened $URL in the default browser\"}"
+  OPEN=xdg-open
 elif command -v xdg-www-browser &>/dev/null; then
-  xdg-www-browser "$URL" 2>/dev/null
+  OPEN=xdg-www-browser
+else
+  echo '{"success": false, "error": "No browser opener found (xdg-open not available)"}'
+  exit 0
+fi
+
+if "$OPEN" "$URL" >/dev/null 2>&1; then
   echo "{\"success\": true, \"result\": \"Opened $URL in the default browser\"}"
 else
-  echo "{\"success\": false, \"error\": \"No browser opener found (xdg-open not available)\"}"
+  echo "{\"success\": false, \"error\": \"Failed to open $URL with $OPEN\"}"
 fi

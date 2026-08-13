@@ -42,6 +42,7 @@ supertonic_3 = []
 [assistant]
 default_model = "llama3.2:1b"
 history_idle_timeout_sec = 3600
+search_folders = ["~/Downloads", "~/Documents", "~/Videos", "~/Music", "~/Pictures"]
 
 [assistant.favorites]
 models = []
@@ -77,6 +78,8 @@ Do not ask the user to type permission commands.
 open_url = "ask"
 screenshot = "ask"
 web_search = "ask"
+clipboard = "ask"
+file_search = "ask"
 "#;
 
 fn config_path() -> Result<PathBuf, String> {

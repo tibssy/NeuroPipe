@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -127,6 +127,9 @@ pub struct Shared {
     memory: MemoryStore,
     pub ollama: OllamaClient,
     pub tts_events: Arc<TtsEvents>,
+    /// Player name, the volume it was set to before ducking, and the number of
+    /// active duck reasons (VAD listening + TTS speaking). None = not ducked.
+    duck_state: Mutex<Option<(String, f32, usize)>>,
 }
 
 pub fn notify(title: &str, body: &str) {
@@ -161,6 +164,7 @@ impl Shared {
             pending_sentences: Mutex::new(0),
             last_activity: Mutex::new(Instant::now()),
             last_memory_digest: Mutex::new(None),
+            duck_state: Mutex::new(None),
         }
     }
 
@@ -215,6 +219,11 @@ impl Shared {
                 }
                 parts.push(String::new());
                 parts.push(self.cfg.assistant.tool_usage_policy.clone());
+                parts.push(
+                    "Search the web at most once per unique query — report what you find and do \
+                     not re-search the same topic with slightly different queries."
+                        .to_string(),
+                );
             }
         }
         HistoryEntry {
@@ -268,6 +277,7 @@ fn tts_sub(addr: &str) -> Option<zmq::Socket> {
 
 pub fn start_tts_event_listener(shared: &Arc<Shared>) {
     let events = Arc::clone(&shared.tts_events);
+    let shared = Arc::clone(shared);
     let addr = shared.cfg.ipc.tts_events.clone();
     thread::spawn(move || loop {
         let Some(socket) = tts_sub(&addr) else {
@@ -278,7 +288,19 @@ pub fn start_tts_event_listener(shared: &Arc<Shared>) {
             match socket.recv_bytes(0) {
                 Ok(bytes) => {
                     if let Ok(message) = serde_json::from_slice::<Value>(&bytes) {
+                        let was_speaking = events.is_speaking();
                         events.record(&message);
+                        // Duck while the assistant's TTS is audible so it can be
+                        // heard over any playing media; restore when it stops.
+                        let is_speaking = events.is_speaking();
+                        let event = message.get("event").and_then(Value::as_str).unwrap_or("");
+                        match event {
+                            "speaking" if !was_speaking => shared.duck_media(),
+                            "sentence_done" | "interrupted" if was_speaking && !is_speaking => {
+                                shared.unduck_media();
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 Err(_) => break,
@@ -290,6 +312,52 @@ pub fn start_tts_event_listener(shared: &Arc<Shared>) {
 
 fn is_cloud_model(model: &str) -> bool {
     model.ends_with(":cloud")
+}
+
+// ---------- media ducking helpers ----------
+
+/// Name of the first MPRIS player that is currently Playing, if any.
+fn first_playing_player() -> Option<String> {
+    let list = Command::new("playerctl").arg("-l").output().ok()?;
+    let text = String::from_utf8_lossy(&list.stdout);
+    for line in text.lines() {
+        let player = line.trim();
+        if player.is_empty() {
+            continue;
+        }
+        let Ok(out) = Command::new("playerctl")
+            .args(["-p", player, "status"])
+            .output()
+        else {
+            continue;
+        };
+        if String::from_utf8_lossy(&out.stdout).trim().eq_ignore_ascii_case("playing") {
+            return Some(player.to_string());
+        }
+    }
+    None
+}
+
+fn playerctl_volume(player: &str) -> Option<f32> {
+    let out = Command::new("playerctl")
+        .args(["-p", player, "volume"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<f32>()
+        .ok()
+}
+
+fn playerctl_set_volume(player: &str, volume: f32) {
+    let _ = Command::new("playerctl")
+        .args(["-p", player, "volume", &volume.to_string()])
+        .output();
+}
+
+/// Current local time as a compact human-readable string, e.g. "Tue 2026-08-09 14:32".
+fn now_str() -> String {
+    chrono::Local::now().format("%a %Y-%m-%d %H:%M").to_string()
 }
 
 // ---------- memory ----------
@@ -410,7 +478,10 @@ impl Shared {
         metadata.insert("model".to_string(), model.clone());
         metadata.insert("mode".to_string(), self.mode.lock().unwrap().clone());
         metadata.insert("cloud_model".to_string(), is_cloud_model(&model).to_string());
-        if self.memory.add_summary(&summary, &metadata, &self.ollama) {
+        // Stamp the stored summary with when it was captured so retrieved
+        // memory carries a date. Dedup stays keyed on the raw summary.
+        let stored = format!("[{}] {}", now_str(), summary);
+        if self.memory.add_summary(&stored, &metadata, &self.ollama) {
             *self.last_memory_digest.lock().unwrap() = Some(digest);
             println!("[memory] Saved summary ({trigger})");
         }
@@ -471,6 +542,54 @@ impl Shared {
         stt_set_mode(&addr, mode);
     }
 
+    /// Lower the volume of the currently playing media player so the assistant
+    /// can hear the user speak over it, or the user can hear the assistant's
+    /// TTS over it. No-op when ducking is disabled or no player is running.
+    /// Multiple callers (VAD listening + TTS speaking) each add a duck reason;
+    /// the volume is only restored once all reasons are gone.
+    pub fn duck_media(&self) {
+        if !self.cfg.assistant.duck_media {
+            return;
+        }
+        let mut state = self.duck_state.lock().unwrap();
+        if let Some((_, _, count)) = state.as_mut() {
+            *count += 1;
+            return;
+        }
+        let Some(player) = first_playing_player() else {
+            return;
+        };
+        let volume = playerctl_volume(&player);
+        if volume.is_none() {
+            return;
+        }
+        playerctl_set_volume(&player, self.cfg.assistant.duck_volume);
+        *state = Some((player, volume.unwrap(), 1));
+    }
+
+    /// Drop one duck reason; restore the media volume when none remain.
+    pub fn unduck_media(&self) {
+        let mut state = self.duck_state.lock().unwrap();
+        if let Some((_, _, count)) = state.as_mut() {
+            if *count > 1 {
+                *count -= 1;
+                return;
+            }
+        }
+        if let Some((player, volume, _)) = state.take() {
+            playerctl_set_volume(&player, volume);
+        }
+    }
+
+    /// Restore the media volume unconditionally (used on session stop), no
+    /// matter how many duck reasons were active.
+    pub fn force_unduck_media(&self) {
+        let mut state = self.duck_state.lock().unwrap();
+        if let Some((player, volume, _)) = state.take() {
+            playerctl_set_volume(&player, volume);
+        }
+    }
+
     fn unload_other_models(&self, keep: &str) {
         if let Ok(running) = self.ollama.running_models() {
             for m in running {
@@ -482,7 +601,7 @@ impl Shared {
     }
 
     fn check_tool_permission(&self, name: &str) -> Option<String> {
-        let tools = self.tools.lock().unwrap();
+        let mut tools = self.tools.lock().unwrap();
         match tools.check(name).as_str() {
             "allow" => None,
             "deny" => Some(format!("Tool '{name}' is disabled.")),
@@ -490,6 +609,7 @@ impl Shared {
                 if tools.is_granted(name) {
                     None
                 } else {
+                    tools.mark_pending(name);
                     notify(
                         "NeuroPipe Assistant",
                         &format!(
@@ -516,19 +636,15 @@ impl Shared {
             return false;
         }
         let mut tools = self.tools.lock().unwrap();
-        let names: Vec<String> = tools
-            .list_all()
-            .as_object()
-            .map(|o| o.keys().cloned().collect())
-            .unwrap_or_default();
-        let mut any = false;
-        for name in names {
-            if tools.check(&name) == "ask" && !tools.is_granted(&name) {
-                tools.grant(&name);
-                any = true;
-            }
+        let Some(name) = tools.pending_tool().map(|s| s.to_string()) else {
+            return false;
+        };
+        if tools.check(&name) == "ask" && !tools.is_granted(&name) {
+            tools.grant(&name);
+            true
+        } else {
+            false
         }
-        any
     }
 
     fn truncate_history(&self, spoken: &[String], last_spoken: &str) {
@@ -562,6 +678,17 @@ impl Shared {
         memory_context: Option<&str>,
     ) -> Option<(Vec<crate::ollama::ToolCall>, String)> {
         let mut request_messages = self.history_json();
+        // Stamp each user message with the time it is being answered, so the
+        // model knows "now" (weather tomorrow, upcoming dates, etc.). Applied
+        // only to the request payload; stored history stays clean.
+        let now = now_str();
+        for msg in request_messages.iter_mut() {
+            if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
+                if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+                    msg["content"] = json!(format!("[{now}] {content}"));
+                }
+            }
+        }
         if let Some(ctx) = memory_context {
             let memory_msg = json!({"role": "system", "content": ctx});
             if request_messages.first().and_then(|m| m.get("role")).and_then(|r| r.as_str()) == Some("system") {
@@ -673,7 +800,7 @@ impl Shared {
     fn ask_ollama(&self, text: &str) {
         println!("\nYou: {text}");
         if self.auto_grant_from_text(text) {
-            println!("[Auto-granted permission for all 'ask' tools this session]");
+            println!("[Auto-granted permission for this session]");
         }
         self.history.lock().unwrap().push(HistoryEntry {
             role: "user".to_string(),
@@ -689,10 +816,13 @@ impl Shared {
             Some(tools_payload)
         };
 
+        // Small local models sometimes emit the same tool call twice (within one
+        // response or repeated in a later round); execute each unique call once.
+        let mut executed_tools: HashSet<(String, String)> = HashSet::new();
+
         for round_num in 0..MAX_TOOL_ROUNDS {
-            let round_tools = if round_num == 0 { tools.as_deref() } else { None };
             let result = self.stream_and_speak(
-                round_tools,
+                tools.as_deref(),
                 if round_num == 0 { memory_context.as_deref() } else { None },
             );
             let (called, spoken) = match result {
@@ -712,6 +842,11 @@ impl Shared {
             for tc in called {
                 let name = tc.name.clone();
                 let args = tc.arguments.clone();
+                let key = (name.clone(), serde_json::to_string(&args).unwrap_or_default());
+                if !executed_tools.insert(key) {
+                    println!("\n[Tool: {name} — skipped duplicate call]");
+                    continue;
+                }
                 println!("\n[Tool: {name}({args})]");
                 match self.check_tool_permission(&name) {
                     Some(err) => {
@@ -781,6 +916,7 @@ impl Shared {
         }
         self.cancel.store(true, Ordering::SeqCst);
         let _ = self.stop_tts();
+        self.force_unduck_media();
         if self.is_busy() {
             let _ = self.interrupt();
         }
@@ -874,5 +1010,69 @@ impl Shared {
         *self.mode.lock().unwrap() = mode.to_string();
         self.set_stt_mode("VAD");
         notify("NeuroPipe", "Listening");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> Config {
+        let mut cfg = Config::load();
+        cfg.assistant.duck_media = true;
+        cfg.assistant.duck_volume = 0.1;
+        cfg
+    }
+
+    /// Requires an MPRIS player actually playing (e.g. `mpv`). Skips when
+    /// playerctl is missing or no player is running.
+    fn playing_player() -> Option<String> {
+        first_playing_player()
+    }
+
+    /// All ducking assertions share one real media player, so they must run
+    /// in a single test body (not separate parallel tests) to avoid racing
+    /// each other over the volume.
+    #[test]
+    fn duck_refcount_round_trip_and_force_unduck() {
+        let Some(player) = playing_player() else {
+            eprintln!("skipping: no playing MPRIS player available");
+            return;
+        };
+        let original = playerctl_volume(&player).unwrap_or(1.0);
+        let shared = Shared::new(test_config());
+
+        shared.duck_media();
+        let ducked = playerctl_volume(&player).unwrap_or(-1.0);
+        assert!(
+            (ducked - 0.1).abs() < 0.01,
+            "expected ducked volume 0.1, got {ducked}"
+        );
+
+        // A second duck reason keeps it ducked through the first unduck.
+        shared.duck_media();
+        shared.unduck_media();
+        let still_ducked = playerctl_volume(&player).unwrap_or(-1.0);
+        assert!(
+            (still_ducked - 0.1).abs() < 0.01,
+            "expected still ducked 0.1, got {still_ducked}"
+        );
+
+        shared.unduck_media();
+        let restored = playerctl_volume(&player).unwrap_or(-1.0);
+        assert!(
+            (restored - original).abs() < 0.01,
+            "expected restored volume {original}, got {restored}"
+        );
+
+        // force_unduck clears all reasons at once (as on session stop).
+        shared.duck_media();
+        shared.duck_media();
+        shared.force_unduck_media();
+        let forced_restored = playerctl_volume(&player).unwrap_or(-1.0);
+        assert!(
+            (forced_restored - original).abs() < 0.01,
+            "expected restored volume {original}, got {forced_restored}"
+        );
     }
 }

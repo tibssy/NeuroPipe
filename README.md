@@ -33,6 +33,7 @@ Build dependencies checked for source installs:
 Assistant dependency:
 
 - [Ollama](https://ollama.com) installed and running, with your target model pulled
+- `mpv` + [mpv-mpris](https://github.com/hoyon/mpv-mpris) + `yt-dlp` — used by the `open_url` tool to play video/audio links (YouTube, Vimeo, direct media files) via MPRIS so `media_control` can control them
 
 ### 1. Clone the repository
 ```bash
@@ -129,6 +130,14 @@ Optional favorites in config can constrain cycling:
 - `tts.favorites` is used by `neuro-ipc tts set-state --voice next|prev`
 - `assistant.favorites.models` is used by `neuro-ipc assistant set-model next|prev`
 - Empty favorites lists keep the old behavior (cycle all available voices/models)
+
+Media ducking (assistant):
+
+- `assistant.duck_media` (`true`/`false`) — lower the media player volume while the
+  user is speaking or while the assistant's TTS is talking, so voice input can be
+  heard over a playing video or song.
+- `assistant.duck_volume` (0.0–1.0, default `0.1`) — the volume ducked media drops to.
+  Requires `playerctl`. Volume is restored when the utterance/TTS finishes or the session stops.
 
 The installer seeds `~/.config/neuropipe/config.toml` from `config.example.toml` if the config file does not already exist.
 

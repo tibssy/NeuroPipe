@@ -1,14 +1,14 @@
 {
   "name": "screenshot",
-  "description": "Capture a screenshot and extract text via OCR. Use when the user asks about errors, code, terminal output, or anything visible on their screen.",
+  "description": "Capture a screenshot and extract text via OCR. Supports wlroots compositors (niri/hyprland/sway), KDE Plasma, GNOME/Cinnamon, and X11 sessions. Use when the user asks about errors, code, terminal output, or anything visible on their screen.",
   "version": 1,
   "parameters": {
     "type": "object",
     "properties": {
       "region": {
         "type": "string",
-        "enum": ["focused", "screen", "select"],
-        "description": "Which area to capture: 'focused' for the active window, 'screen' for the full display, 'select' for interactive area selection"
+        "enum": ["focused", "screen"],
+        "description": "Which area to capture: 'focused' (default) captures the active window, falling back to the active or default screen; 'screen' captures the active display"
       }
     },
     "required": ["region"]

@@ -22,6 +22,8 @@ pub struct AssistantConfig {
     pub system_prompt: String,
     pub tool_usage_policy: String,
     pub tools: Vec<(String, String)>,
+    pub duck_media: bool,
+    pub duck_volume: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -72,6 +74,17 @@ tool_usage_policy = ""
 open_url = "ask"
 screenshot = "ask"
 web_search = "ask"
+media_control = "allow"
+
+# Duck (lower) media playback volume while the user is speaking, so the
+# assistant can hear the user over a playing video or song.
+duck_media = true
+duck_volume = 0.1
+
+# Folders the file_search tool may look in when the user asks to find or open
+# a file. Leave empty to default to Downloads, Documents, Videos, Music,
+# Pictures. Relative paths resolve against $HOME.
+search_folders = ["~/Downloads", "~/Documents", "~/Videos", "~/Music", "~/Pictures"]
 "#;
 
 fn config_path() -> PathBuf {
@@ -113,6 +126,10 @@ fn b(t: &TomlMap<String, TomlValue>, key: &str, default: bool) -> bool {
 
 fn i(t: &TomlMap<String, TomlValue>, key: &str, default: i64) -> i64 {
     t.get(key).and_then(|v| v.as_integer()).unwrap_or(default)
+}
+
+fn f(t: &TomlMap<String, TomlValue>, key: &str, default: f64) -> f64 {
+    t.get(key).and_then(|v| v.as_float()).unwrap_or(default)
 }
 
 impl Config {
@@ -167,6 +184,8 @@ fn load_config() -> Config {
         system_prompt: s(&inst_t, "system_prompt", sys_default),
         tool_usage_policy: s(&inst_t, "tool_usage_policy", tools_default),
         tools,
+        duck_media: b(&ast, "duck_media", true),
+        duck_volume: f(&ast, "duck_volume", 0.1).clamp(0.0, 1.0) as f32,
     };
 
     Config {

@@ -1,6 +1,6 @@
 {
   "name": "web_search",
-  "description": "Search the web for current information. Use when the user asks about news, facts, weather, or anything requiring up-to-date knowledge. Call this ONCE per unique query and report what you find — do not re-search the same topic with slightly different queries if the results are not detailed enough. The ONLY accepted parameters are 'query' (the search string) and 'max_results' (number of results, default 5, max 10). No other parameters are supported.",
+  "description": "Search the web for current information. Use when the user asks about news, facts, weather, or anything requiring up-to-date knowledge. Only accepted parameters are 'query' (the search string) and 'max_results' (number of results, default 5, max 10). No other parameters are supported.",
   "version": 1,
   "parameters": {
     "type": "object",

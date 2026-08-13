@@ -1,36 +1,89 @@
 #!/usr/bin/env python3
 import json
 import os
+import shutil
 import subprocess as sp
 import sys
 
 SCREENSHOT_DIR = "/tmp/neuropipe_screenshots"
+NIRI_GAP = 16  # niri default tile gap, used to estimate the window's top offset
+
+WLROOTS_IPC = {"hyprland", "niri", "sway"}
+WLROOTS_COMPOSITORS = WLROOTS_IPC | {"river", "wayfire", "labwc"}
 
 
-def detect_compositor() -> str:
+def is_wayland() -> bool:
+    return bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+
+
+def detect_backend() -> str:
+    """Best-effort detection of the capture backend."""
     de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
-    if "hyprland" in de:
-        return "hyprland"
-    elif "niri" in de:
-        return "niri"
-    elif "sway" in de:
-        return "sway"
-    return "unknown"
+    if any(k in de for k in ("hyprland", "niri", "sway", "river", "wayfire", "labwc")):
+        return "wlroots"
+    if "kde" in de or "plasma" in de:
+        return "kde"
+    if "gnome" in de:
+        return "gnome"
+    if "cinnamon" in de:
+        return "cinnamon"
+    if is_wayland():
+        return "unknown"
+    return "x11"
+
+
+def wlroots_compositor() -> str:
+    de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    for name in ("hyprland", "niri", "sway"):
+        if name in de:
+            return name
+    return ""
+
+
+def required_bins(backend: str) -> list:
+    bins = ["tesseract"]
+    if backend == "wlroots":
+        bins.append("grim")
+    elif backend == "kde":
+        bins.append("spectacle")
+    elif backend in ("gnome", "cinnamon"):
+        bins.append("gnome-screenshot")
+    elif backend == "x11":
+        bins.append("scrot")
+    return bins
+
+
+def jcmd(cmd: list):
+    try:
+        return json.loads(sp.run(cmd, capture_output=True, text=True, timeout=5).stdout)
+    except Exception:
+        return None
 
 
 def focused_geometry(compositor: str) -> str | None:
-    try:
-        if compositor == "hyprland":
-            out = sp.run(["hyprctl", "-j", "activewindow"], capture_output=True, text=True).stdout
-            d = json.loads(out)
+    """'x,y WxH' of the active/focused window, or None if unknown."""
+    if compositor == "hyprland":
+        d = jcmd(["hyprctl", "-j", "activewindow"])
+        if d and d.get("at") and d.get("size"):
             return f"{d['at'][0]},{d['at'][1]} {d['size'][0]}x{d['size'][1]}"
-        elif compositor == "niri":
-            out = sp.run(["niri", "msg", "focused-window"], capture_output=True, text=True).stdout
-            d = json.loads(out)["geometry"]
-            return f"{d['x']},{d['y']} {d['width']}x{d['height']}"
-        elif compositor == "sway":
-            out = sp.run(["swaymsg", "-t", "get_tree"], capture_output=True, text=True).stdout
-            d = json.loads(out)
+    elif compositor == "niri":
+        out = jcmd(["niri", "msg", "-j", "focused-output"])
+        win = jcmd(["niri", "msg", "-j", "focused-window"])
+        if not (out and win and win.get("layout")):
+            return None
+        lo = out.get("logical")
+        layout = win["layout"]
+        if not lo:
+            return None
+        ww, wh = layout.get("window_size") or layout.get("tile_size") or [0, 0]
+        if not ww or not wh:
+            return None
+        x = lo["x"] + (lo["width"] - ww) // 2
+        y = lo["y"] + min((lo["height"] - wh) // 2, NIRI_GAP)
+        return f"{x},{y} {ww}x{wh}"
+    elif compositor == "sway":
+        d = jcmd(["swaymsg", "-t", "get_tree"])
+        if d:
             def find(node):
                 if node.get("focused"):
                     return node["rect"]
@@ -42,36 +95,109 @@ def focused_geometry(compositor: str) -> str | None:
             r = find(d)
             if r:
                 return f"{r['x']},{r['y']} {r['width']}x{r['height']}"
-    except Exception:
-        pass
     return None
 
 
+def active_output(compositor: str) -> str | None:
+    """Name of the currently focused monitor, or None if unknown."""
+    if compositor == "hyprland":
+        for m in jcmd(["hyprctl", "-j", "monitors"]) or []:
+            if m.get("focused"):
+                return m.get("name")
+    elif compositor == "niri":
+        d = jcmd(["niri", "msg", "-j", "focused-output"])
+        if d:
+            return d.get("name")
+    elif compositor == "sway":
+        for o in jcmd(["swaymsg", "-t", "get_outputs"]) or []:
+            if o.get("focused"):
+                return o.get("name")
+    return None
+
+
+def run_cmd(cmd: list) -> bool:
+    try:
+        return sp.run(cmd).returncode == 0
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def capture_wlroots(region: str, path: str) -> bool:
+    compositor = wlroots_compositor()
+    if region == "screen":
+        out = active_output(compositor)
+        if out and run_cmd(["grim", "-o", out, path]):
+            return True
+        return run_cmd(["grim", path])
+    # Focused: the active/focused window, falling back to the active output.
+    if compositor in WLROOTS_IPC:
+        geom = focused_geometry(compositor)
+        if geom and run_cmd(["grim", "-g", geom, path]):
+            return True
+    out = active_output(compositor)
+    if out and run_cmd(["grim", "-o", out, path]):
+        return True
+    return run_cmd(["grim", path])
+
+
+def capture_kde(region: str, path: str) -> bool:
+    if region == "screen":
+        if run_cmd(["spectacle", "-b", "-n", "-m", "-o", path]):
+            return True
+        return run_cmd(["spectacle", "-b", "-n", "-f", "-o", path])
+    # Focused: the active window, falling back to the current monitor.
+    if run_cmd(["spectacle", "-b", "-n", "-a", "-o", path]):
+        return True
+    if run_cmd(["spectacle", "-b", "-n", "-m", "-o", path]):
+        return True
+    return run_cmd(["spectacle", "-b", "-n", "-f", "-o", path])
+
+
+def capture_gnome(region: str, path: str) -> bool:
+    if region == "screen":
+        return run_cmd(["gnome-screenshot", "-f", path])
+    # Focused: the active window, falling back to the full screen.
+    if run_cmd(["gnome-screenshot", "-w", "-f", path]):
+        return True
+    return run_cmd(["gnome-screenshot", "-f", path])
+
+
+def capture_x11(region: str, path: str) -> bool:
+    if region == "screen":
+        return run_cmd(["scrot", path])
+    # Focused: the active window, falling back to the full screen.
+    if run_cmd(["scrot", "-u", path]):
+        return True
+    return run_cmd(["scrot", path])
+
+
 def capture(region: str, path: str) -> bool:
-    if region == "focused":
-        geom = focused_geometry(detect_compositor())
-        if geom:
-            return sp.run(["grim", "-g", geom, path]).returncode == 0
-        geom = sp.run(["slurp"], capture_output=True, text=True).stdout.strip()
-        if geom:
-            return sp.run(["grim", "-g", geom, path]).returncode == 0
-        return False
-    elif region == "screen":
-        return sp.run(["grim", path]).returncode == 0
-    elif region == "select":
-        geom = sp.run(["slurp"], capture_output=True, text=True).stdout.strip()
-        if geom:
-            return sp.run(["grim", "-g", geom, path]).returncode == 0
-        return False
+    backend = detect_backend()
+    if backend == "wlroots":
+        return capture_wlroots(region, path)
+    if backend == "kde":
+        return capture_kde(region, path)
+    if backend in ("gnome", "cinnamon"):
+        return capture_gnome(region, path)
+    if backend == "x11":
+        return capture_x11(region, path)
     return False
 
 
 def ocr(path: str) -> str:
-    result = sp.run(
-        ["tesseract", path, "stdout", "--oem", "3", "--psm", "6"],
-        capture_output=True, text=True, timeout=30,
-    )
-    return result.stdout.strip() or "(no text detected)"
+    try:
+        result = sp.run(
+            ["tesseract", path, "stdout", "--oem", "3", "--psm", "6"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, OSError):
+        return "(OCR failed: tesseract not available)"
+    except sp.TimeoutExpired:
+        return "(OCR timed out)"
+    text = result.stdout.strip() or "(no text detected)"
+    if len(text) > 2000:
+        text = text[:2000] + "…[truncated]"
+    return text
 
 
 def main():
@@ -81,6 +207,45 @@ def main():
         params = json.loads(sys.stdin.read())
 
     region = params.get("region", "focused")
+    if region not in ("focused", "screen"):
+        print(json.dumps({
+            "success": False,
+            "error": f"Unsupported region '{region}'. Choose 'focused' or 'screen'.",
+        }))
+        return
+
+    backend = detect_backend()
+    if backend == "unknown":
+        de = os.environ.get("XDG_CURRENT_DESKTOP", "unknown")
+        print(json.dumps({
+            "success": False,
+            "error": f"Unsupported desktop environment '{de}'. Supported: wlroots (niri/hyprland/sway), KDE Plasma, GNOME, Cinnamon, and X11.",
+        }))
+        return
+
+    if backend == "gnome" and is_wayland() and shutil.which("gnome-screenshot") is None:
+        print(json.dumps({
+            "success": False,
+            "error": "gnome-screenshot is not available on GNOME Wayland 42+, which replaced it with a built-in capture UI. Run under GNOME X11, KDE, Cinnamon, or a wlroots compositor.",
+        }))
+        return
+
+    missing = [bin for bin in required_bins(backend) if shutil.which(bin) is None]
+    if missing:
+        hints = {
+            "grim": "grim (wlroots)",
+            "spectacle": "spectacle (KDE)",
+            "gnome-screenshot": "gnome-screenshot (GNOME/Cinnamon)",
+            "scrot": "scrot (X11)",
+            "tesseract": "tesseract (OCR)",
+        }
+        install = ", ".join(hints[b] for b in missing)
+        print(json.dumps({
+            "success": False,
+            "error": f"Missing dependencies: {', '.join(missing)}. Install {install}.",
+        }))
+        return
+
     os.makedirs(SCREENSHOT_DIR, exist_ok=True)
     path = os.path.join(SCREENSHOT_DIR, "capture.png")
 

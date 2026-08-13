@@ -1,10 +1,22 @@
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeSet, HashMap},
-    fs, path::PathBuf, process::Command,
+    fs, path::PathBuf,
+    process::{Command, Stdio},
+    time::{Duration, Instant},
 };
 
 const EXEC_TIMEOUT_SECS: u64 = 30;
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max).collect();
+        out.push_str("…[truncated]");
+        out
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ToolDef {
@@ -31,6 +43,7 @@ pub struct ToolManager {
     tools: Vec<ToolDef>,
     config: HashMap<String, String>,
     granted: BTreeSet<String>,
+    last_pending: Option<String>,
 }
 
 impl ToolManager {
@@ -39,7 +52,7 @@ impl ToolManager {
         for (name, lvl) in initial {
             config.insert(name.clone(), lvl.clone());
         }
-        Self { tools: Vec::new(), config, granted: BTreeSet::new() }
+        Self { tools: Vec::new(), config, granted: BTreeSet::new(), last_pending: None }
     }
 
     pub fn discover(&mut self) {
@@ -93,8 +106,12 @@ impl ToolManager {
                     let def = md
                         .get("default_permission")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("ask")
-                        .to_string();
+                        .unwrap_or("ask");
+                    let def = if matches!(def, "allow" | "ask" | "deny") {
+                        def.to_string()
+                    } else {
+                        "ask".to_string()
+                    };
                     self.config.insert(name.clone(), def);
                 }
                 self.tools.push(definition);
@@ -141,10 +158,22 @@ impl ToolManager {
 
     pub fn grant(&mut self, name: &str) {
         self.granted.insert(name.to_string());
+        if self.last_pending.as_deref() == Some(name) {
+            self.last_pending = None;
+        }
+    }
+
+    pub fn mark_pending(&mut self, name: &str) {
+        self.last_pending = Some(name.to_string());
+    }
+
+    pub fn pending_tool(&self) -> Option<&str> {
+        self.last_pending.as_deref()
     }
 
     pub fn reset_session(&mut self) {
         self.granted.clear();
+        self.last_pending = None;
     }
 
     pub fn execute(&self, name: &str, params: &Value) -> String {
@@ -154,25 +183,49 @@ impl ToolManager {
         };
         let params_json = params.to_string();
 
-        let filepath = tool.filepath.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let output = Command::new(&filepath).arg(&params_json).output();
-            let _ = tx.send(output);
-        });
-
-        let output = match rx.recv_timeout(std::time::Duration::from_secs(EXEC_TIMEOUT_SECS)) {
-            Ok(o) => o,
-            Err(_) => return format!("Error: tool timed out after {EXEC_TIMEOUT_SECS}s"),
+        let mut child = match Command::new(&tool.filepath)
+            .arg(&params_json)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => return format!("Error: failed to launch tool '{name}': {e}"),
         };
-        let output = match output {
+
+        let start = Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if start.elapsed() >= Duration::from_secs(EXEC_TIMEOUT_SECS) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return format!(
+                            "Error: tool '{name}' timed out after {EXEC_TIMEOUT_SECS}s and was killed"
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => return format!("Error: tool '{name}': {e}"),
+            }
+        };
+
+        let output = match child.wait_with_output() {
             Ok(o) => o,
-            Err(e) => return format!("Error: {e}"),
+            Err(e) => return format!("Error: tool '{name}': {e}"),
         };
 
         let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !output.status.success() {
-            return format!("Error: tool exited with code {:?}", output.status.code());
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let detail = if stderr.is_empty() {
+                format!("exited with code {:?}", status.code())
+            } else {
+                format!("exited with code {:?}: {}", status.code(), truncate(&stderr, 1000))
+            };
+            return format!("Error: tool '{name}' {detail}");
         }
         match serde_json::from_str::<Value>(&out) {
             Ok(data) => {
@@ -197,5 +250,49 @@ impl ToolManager {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grant_clears_matching_pending() {
+        let mut m = ToolManager::new(&[]);
+        m.mark_pending("open_url");
+        assert_eq!(m.pending_tool(), Some("open_url"));
+        m.grant("open_url");
+        assert!(m.is_granted("open_url"));
+        assert!(m.pending_tool().is_none());
+    }
+
+    #[test]
+    fn pending_tracks_most_recent() {
+        let mut m = ToolManager::new(&[]);
+        m.mark_pending("screenshot");
+        m.mark_pending("web_search");
+        assert_eq!(m.pending_tool(), Some("web_search"));
+        m.grant("web_search");
+        assert!(m.pending_tool().is_none());
+        assert!(!m.is_granted("screenshot"));
+    }
+
+    #[test]
+    fn reset_session_clears_granted_and_pending() {
+        let mut m = ToolManager::new(&[]);
+        m.mark_pending("web_search");
+        m.grant("open_url");
+        m.reset_session();
+        assert!(m.pending_tool().is_none());
+        assert!(!m.is_granted("open_url"));
+    }
+
+    #[test]
+    fn discover_validates_default_permission() {
+        let mut m = ToolManager::new(&[]);
+        m.discover();
+        assert_eq!(m.check("open_url"), "deny");
+        assert_eq!(m.check("screenshot"), "ask");
     }
 }

@@ -96,7 +96,9 @@ fn main() -> Result<()> {
                         last_scored_ms = 0;
                     } else {
                         silence_ms += CHUNK_MS;
-                        if silence_ms >= 250 && silence_ms - last_scored_ms >= 400 {
+                        if silence_ms >= cfg.stt.turn_hold_ms
+                            && silence_ms - last_scored_ms >= cfg.stt.turn_score_cadence_ms
+                        {
                             let ctx = engines::endpoint::TurnContext {
                                 tail: tail.iter().copied().collect(),
                                 recording: tail.iter().copied().collect(),

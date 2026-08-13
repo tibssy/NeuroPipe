@@ -1,0 +1,21 @@
+{
+  "name": "media_control",
+  "description": "Control playback of media that is ALREADY open in a player or browser tab (e.g. YouTube or a song in Firefox): play, pause, resume, skip, stop, seek, volume, loop, shuffle. When the user says 'play', 'pause', 'resume', 'skip', or 'stop' a video, song, or stream, use this tool — do NOT open URLs.",
+  "version": 1,
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["status", "play", "pause", "play-pause", "next", "previous", "stop", "seek", "volume", "volume_up", "volume_down", "loop", "shuffle"],
+        "description": "What to do: 'status' reports the current player and track; 'play'/'pause'/'play-pause'/'next'/'previous'/'stop' control playback; 'seek' jumps by a relative offset (value like '+10' or '-5' seconds); 'volume' gets or sets the level (value 0.0-1.0); 'volume_up'/'volume_down' adjust by 0.05 (or a custom value); 'loop' gets or sets loop state (value 'None'/'Track'/'Playlist'); 'shuffle' gets or sets shuffle state (value 'On'/'Off'/'Toggle')"
+      },
+      "value": {
+        "type": "string",
+        "description": "Optional value for the action: seek offset in seconds (e.g. '+10', '-5'), volume level (0.0-1.0), or loop/shuffle state"
+      }
+    },
+    "required": ["action"]
+  },
+  "default_permission": "allow"
+}

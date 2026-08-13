@@ -1,0 +1,143 @@
+#!/bin/bash
+
+PARAMS="$1"
+if [[ -z "$PARAMS" ]]; then
+  PARAMS=$(cat)
+fi
+
+ACTION=$(echo "$PARAMS" | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('action') or '').strip().lower())" 2>/dev/null)
+PATTERN=$(echo "$PARAMS" | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('pattern') or '').strip())" 2>/dev/null)
+FSPATH=$(echo "$PARAMS" | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('path') or '').strip())" 2>/dev/null)
+LIMIT=$(echo "$PARAMS" | python3 -c "import sys,json; print(int(json.load(sys.stdin).get('limit') or 10))" 2>/dev/null)
+[[ -z "$LIMIT" ]] && LIMIT=10
+if (( LIMIT > 20 )); then LIMIT=20; fi
+if (( LIMIT < 1 )); then LIMIT=1; fi
+
+if [[ -z "$ACTION" ]]; then
+  echo '{"success": false, "error": "No action provided (search, recent, or open)"}'
+  exit 0
+fi
+
+# Read search_folders from the neuropipe config; fall back to XDG-style home dirs.
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/neuropipe/config.toml"
+read_roots() {
+  local roots
+  roots=$(python3 - "$CONFIG_FILE" <<'PYEOF' 2>/dev/null
+import sys, tomllib
+p = sys.argv[1]
+try:
+    with open(p, "rb") as f:
+        d = tomllib.load(f)
+    folders = d.get("assistant", {}).get("search_folders", [])
+    if isinstance(folders, list):
+        for fd in folders:
+            print(str(fd).replace("~", __import__("os").path.expanduser("~")))
+except Exception:
+    pass
+PYEOF
+)
+  if [[ -z "$roots" ]]; then
+    for d in Downloads Documents Videos Music Pictures; do
+      if [[ -d "$HOME/$d" ]]; then echo "$HOME/$d"; fi
+    done
+  else
+    printf '%s\n' "$roots"
+  fi
+}
+ROOTS=$(read_roots)
+if [[ -z "$ROOTS" ]]; then
+  echo "{\"success\": false, \"error\": \"No search folders configured or available in $HOME\"}"
+  exit 0
+fi
+
+case "$ACTION" in
+  search)
+    if [[ -z "$PATTERN" ]]; then
+      echo '{"success": false, "error": "search requires a pattern (name substring or extension like .pdf)"}'
+      exit 0
+    fi
+    # Build a find test: either a name case-insensitive substring match or an extension match.
+    if [[ "$PATTERN" == .* ]]; then
+      EXT=$(echo "$PATTERN" | tr '[:upper:]' '[:lower:]' | sed 's/^\.//')
+      RESULTS=$(while IFS= read -r root; do
+        [[ -z "$root" ]] && continue
+        find "$root" -path '*/.*' -prune -o -type f -iname "*.$EXT" -print 2>/dev/null
+      done <<< "$ROOTS" | head -n "$LIMIT")
+    else
+      NAME=$(echo "$PATTERN" | tr '[:upper:]' '[:lower:]')
+      RESULTS=$(while IFS= read -r root; do
+        [[ -z "$root" ]] && continue
+        find "$root" -path '*/.*' -prune -o -type f -iname "*$NAME*" -print 2>/dev/null
+      done <<< "$ROOTS" | head -n "$LIMIT")
+    fi
+    if [[ -z "$RESULTS" ]]; then
+      echo "{\"success\": true, \"result\": \"No files matching '$PATTERN' found in the search folders\"}"
+    else
+      echo "{\"success\": true, \"result\": \"Found files matching '$PATTERN':\", \"files\": [$(python3 -c "import sys,json; print(', '.join(json.dumps(f) for f in sys.stdin.read().splitlines()))" <<< "$RESULTS")]}"
+    fi
+    ;;
+
+  recent)
+    # Files modified within the last 7 days, most recent first.
+    RESULTS=$(while IFS= read -r root; do
+      [[ -z "$root" ]] && continue
+      find "$root" -path '*/.*' -prune -o -type f -mtime -7 -printf '%T@\t%p\n' 2>/dev/null
+    done <<< "$ROOTS" | sort -rn | head -n "$LIMIT" | cut -f2-)
+    if [[ -z "$RESULTS" ]]; then
+      echo '{"success": true, "result": "No files modified in the last 7 days found in the search folders"}'
+    else
+      echo "{\"success\": true, \"result\": \"Recently modified files in the search folders:\", \"files\": [$(python3 -c "import sys,json; print(', '.join(json.dumps(f) for f in sys.stdin.read().splitlines()))" <<< "$RESULTS")]}"
+    fi
+    ;;
+
+  open)
+    if [[ -z "$FSPATH" ]]; then
+      echo '{"success": false, "error": "open requires a path argument"}'
+      exit 0
+    fi
+    # Resolve symlinks and require the target to live inside a configured root.
+    RESOLVED=$(readlink -f "$FSPATH" 2>/dev/null)
+    if [[ -z "$RESOLVED" || ! -e "$RESOLVED" ]]; then
+      echo "{\"success\": false, \"error\": \"File not found: $FSPATH\"}"
+      exit 0
+    fi
+    INSIDE=""
+    while IFS= read -r root; do
+      [[ -z "$root" ]] && continue
+      r=$(readlink -f "$root")
+      case "$RESOLVED" in
+        "$r"/*|"$r") INSIDE=1 ;;
+      esac
+    done <<< "$ROOTS"
+    if [[ -z "$INSIDE" ]]; then
+      echo "{\"success\": false, \"error\": \"Refusing to open $FSPATH: outside the configured search folders\"}"
+      exit 0
+    fi
+    is_media() {
+      case "$1" in
+        *.mp4|*.webm|*.mkv|*.mov|*.m4v|*.mp3|*.flac|*.ogg|*.opus|*.wav|*.m3u8|*.m3u) return 0 ;;
+      esac
+      return 1
+    }
+    if is_media "$RESOLVED"; then
+      if command -v mpv &>/dev/null; then
+        nohup setsid mpv --no-terminal "$RESOLVED" >/dev/null 2>&1 &
+        echo "{\"success\": true, \"result\": \"Playing $RESOLVED with mpv\"}"
+        exit 0
+      fi
+    fi
+    if command -v xdg-open &>/dev/null; then
+      if xdg-open "$RESOLVED" >/dev/null 2>&1; then
+        echo "{\"success\": true, \"result\": \"Opened $RESOLVED with the default application\"}"
+      else
+        echo "{\"success\": false, \"error\": \"Failed to open $RESOLVED with xdg-open\"}"
+      fi
+    else
+      echo '{"success": false, "error": "xdg-open is not available"}'
+    fi
+    ;;
+
+  *)
+    echo "{\"success\": false, \"error\": \"Unknown action '$ACTION' (expected search, recent, or open)\"}"
+    ;;
+esac

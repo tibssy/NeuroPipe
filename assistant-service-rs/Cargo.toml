@@ -19,6 +19,7 @@ reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], def
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 once_cell = "1.21.4"
+chrono = "0.4"
 
 [profile.release]
 lto = true
