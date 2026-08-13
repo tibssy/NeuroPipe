@@ -59,6 +59,11 @@ supertonic_3 = []
 default_model = "llama3.2:1b"
 history_idle_timeout_sec = 3600
 
+# Folders the `file_search` tool may look in when the user asks to find or open
+# a file. Leave empty to default to Downloads, Documents, Videos, Music,
+# Pictures. Relative/`~` paths resolve against $HOME.
+search_folders = ["~/Downloads", "~/Documents", "~/Videos", "~/Music", "~/Pictures"]
+
 # Duck (lower) media playback volume while the user is speaking, so the
 # assistant can hear the user over a playing video or song.
 duck_media = true
@@ -106,3 +111,5 @@ open_url = "ask"
 screenshot = "ask"
 web_search = "ask"
 media_control = "allow"
+clipboard = "ask"
+file_search = "ask"

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Clipboard tool: read or write the system clipboard.
+# Reads params from argv[1] as JSON (or stdin). Emits {"success": bool, ...}.
+set -u
+
+PARAMS="$1"
+if [[ -z "$PARAMS" ]]; then
+  PARAMS=$(cat)
+fi
+
+action=$(printf '%s' "$PARAMS" | python3 -c "import sys,json; print((json.load(sys.stdin).get('action') or 'read').strip())" 2>/dev/null)
+text=$(printf '%s' "$PARAMS" | python3 -c "import sys,json; print((json.load(sys.stdin).get('text') or ''))" 2>/dev/null)
+
+if [[ "$action" == "read" ]]; then
+  if command -v wl-paste >/dev/null 2>&1; then
+    OUT=$(wl-paste -n 2>/dev/null)
+  elif command -v xclip >/dev/null 2>&1; then
+    OUT=$(xclip -o -selection c 2>/dev/null)
+  else
+    echo '{"success": false, "error": "No clipboard tool found. Install wl-clipboard (Wayland) or xclip (X11)."}'
+    exit 0
+  fi
+  if [[ -z "$OUT" ]]; then
+    echo '{"success": true, "result": "The clipboard is empty."}'
+    exit 0
+  fi
+  # Truncate very long clipboard content so the reply stays voice-friendly.
+  if [[ "${#OUT}" -gt 4000 ]]; then
+    TRIM="${OUT:0:4000}"
+    echo "{\"success\": true, \"result\": $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$TRIM")…[clipped, full length ${#OUT} chars]}"
+  else
+    echo "{\"success\": true, \"result\": $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$OUT")}"
+  fi
+  exit 0
+fi
+
+if [[ "$action" == "set" ]]; then
+  if [[ -z "$text" ]]; then
+    echo '{"success": false, "error": "No text provided for clipboard set."}'
+    exit 0
+  fi
+  if command -v wl-copy >/dev/null 2>&1; then
+    printf '%s' "$text" | wl-copy 2>/dev/null
+  elif command -v xclip >/dev/null 2>&1; then
+    printf '%s' "$text" | xclip -selection c 2>/dev/null
+  else
+    echo '{"success": false, "error": "No clipboard tool found. Install wl-clipboard (Wayland) or xclip (X11)."}'
+    exit 0
+  fi
+  preview="${text:0:80}"
+  echo "{\"success\": true, \"result\": $(python3 -c "import json,sys; print('Copied to clipboard: ' + json.dumps(sys.argv[1]))" "$preview")}"
+  exit 0
+fi
+
+echo "{\"success\": false, \"error\": \"Unknown clipboard action: $action\"}"

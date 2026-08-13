@@ -80,6 +80,11 @@ media_control = "allow"
 # assistant can hear the user over a playing video or song.
 duck_media = true
 duck_volume = 0.1
+
+# Folders the file_search tool may look in when the user asks to find or open
+# a file. Leave empty to default to Downloads, Documents, Videos, Music,
+# Pictures. Relative paths resolve against $HOME.
+search_folders = ["~/Downloads", "~/Documents", "~/Videos", "~/Music", "~/Pictures"]
 "#;
 
 fn config_path() -> PathBuf {
