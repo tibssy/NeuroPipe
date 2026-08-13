@@ -50,3 +50,5 @@ tts-service-rs/target/
 tts-service-rs/dist/
 stt-service-rs/target/
 stt-service-rs/dist/
+neuropipe-settings/target/
+neuropipe-settings/dist/
