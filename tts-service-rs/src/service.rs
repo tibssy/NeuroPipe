@@ -162,6 +162,14 @@ impl TtsService {
         resolve_speed(&self.config.tts.speeds, engine, self.config.tts.defaults.speed)
     }
 
+    fn active_quality_for(&self, engine: &str) -> String {
+        resolve_quality(
+            &self.config.tts.qualities,
+            engine,
+            &self.config.tts.defaults.quality,
+        )
+    }
+
     fn handle(&mut self, message: Value) -> Value {
         match message.get("command").and_then(Value::as_str) {
             Some("speak") => self.speak(&message),
@@ -182,11 +190,12 @@ impl TtsService {
                 "engine": self.config.tts.defaults.engine,
                 "voice": self.config.tts.defaults.voice,
                 "speed": self.active_speed_for(&self.config.tts.defaults.engine),
-                "quality": self.config.tts.defaults.quality,
+                "quality": self.active_quality_for(&self.config.tts.defaults.engine),
                 "speaking": self.speaking.load(Ordering::SeqCst),
             }),
             Some("list_voices") => self.list_voices(&message),
             Some("set_state") => self.set_state(&message),
+            Some("reload_config") => self.reload_config(),
             Some(command) => {
                 json!({"status": "error", "message": format!("Unknown command '{command}'")})
             }
@@ -220,8 +229,8 @@ impl TtsService {
         let quality = message
             .get("quality")
             .and_then(Value::as_str)
-            .unwrap_or(&self.config.tts.defaults.quality)
-            .to_string();
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.active_quality_for(&engine));
         let quality = match quality.as_str() {
             "low" => Quality::Low,
             "high" => Quality::High,
@@ -267,8 +276,9 @@ impl TtsService {
         let quality = message
             .get("quality")
             .and_then(Value::as_str)
-            .unwrap_or(&self.config.tts.defaults.quality);
-        let quality = match quality {
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.active_quality_for(&engine));
+        let quality = match quality.as_str() {
             "low" => Quality::Low,
             "high" => Quality::High,
             _ => return Err(anyhow!("quality must be 'low' or 'high'")),
@@ -379,10 +389,9 @@ impl TtsService {
             .unwrap_or(&self.config.tts.defaults.voice)
             .to_string();
         let requested_speed = message.get("speed").and_then(Value::as_f64);
-        let quality = message
-            .get("quality")
-            .and_then(Value::as_str)
-            .unwrap_or(&self.config.tts.defaults.quality)
+        let requested_quality = message.get("quality").and_then(Value::as_str);
+        let quality = requested_quality
+            .unwrap_or_else(|| &self.config.tts.defaults.quality)
             .to_string();
         if !matches!(quality.as_str(), "low" | "high") {
             return json!({"status": "error", "message": "Invalid quality"});
@@ -405,10 +414,35 @@ impl TtsService {
             }
             None => self.active_speed_for(&engine),
         };
+        let quality = if requested_quality.is_some() {
+            self.config
+                .tts
+                .qualities
+                .insert(engine.clone(), quality.clone());
+            quality
+        } else {
+            self.active_quality_for(&engine)
+        };
         self.config.tts.defaults.engine = engine;
         self.config.tts.defaults.voice = voice;
-        self.config.tts.defaults.quality = quality;
-        json!({"status": "ok", "engine": self.config.tts.defaults.engine, "voice": self.config.tts.defaults.voice, "speed": speed, "quality": self.config.tts.defaults.quality})
+        json!({"status": "ok", "engine": self.config.tts.defaults.engine, "voice": self.config.tts.defaults.voice, "speed": speed, "quality": quality})
+    }
+
+    /// Re-read config.toml and apply the new values in place. All runtime
+    /// settings (engine, voice, speeds, qualities, idle timeout) are read from
+    /// `self.config` on every use, so swapping the whole document is a complete
+    /// hot reload. Loaded engine models are left untouched; they are rebuilt
+    /// lazily on the next warm/speak if engine or quality changed.
+    fn reload_config(&mut self) -> Value {
+        self.config = crate::config::load();
+        let engine = self.config.tts.defaults.engine.clone();
+        json!({
+            "status": "ok",
+            "engine": self.config.tts.defaults.engine,
+            "voice": self.config.tts.defaults.voice,
+            "speed": self.active_speed_for(&engine),
+            "quality": self.active_quality_for(&engine),
+        })
     }
 }
 
@@ -567,6 +601,17 @@ fn resolve_speed(speeds: &HashMap<String, f64>, engine: &str, fallback: f64) -> 
         .unwrap_or(fallback)
 }
 
+fn resolve_quality(qualities: &HashMap<String, String>, engine: &str, fallback: &str) -> String {
+    if let Some(quality) = qualities.get(engine) {
+        return quality.clone();
+    }
+    let variant = engine.replace('-', "_");
+    qualities
+        .get(&variant)
+        .cloned()
+        .unwrap_or_else(|| fallback.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,6 +649,58 @@ mod tests {
         assert_eq!(resolve_speed(&speeds, "pocket-tts", 1.0), 1.2);
         assert_eq!(resolve_speed(&speeds, "pocket_tts", 1.0), 1.2);
         assert_eq!(resolve_speed(&speeds, "supertonic-3", 1.0), 1.0);
+    }
+
+    #[test]
+    fn per_engine_quality_resolution() {
+        let mut qualities = HashMap::new();
+        qualities.insert("kokoro".to_string(), "low".to_string());
+        qualities.insert("pocket_tts".to_string(), "high".to_string());
+
+        assert_eq!(resolve_quality(&qualities, "kokoro", "high"), "low");
+        assert_eq!(resolve_quality(&qualities, "pocket-tts", "high"), "high");
+        assert_eq!(resolve_quality(&qualities, "pocket_tts", "high"), "high");
+        assert_eq!(resolve_quality(&qualities, "supertonic-3", "high"), "high");
+    }
+
+    #[test]
+    fn reload_config_applies_new_values() {
+        let original_home = std::env::var("HOME").ok();
+        let dir = std::env::temp_dir().join(format!("np_tts_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".config/neuropipe")).unwrap();
+        std::env::set_var("HOME", &dir);
+        std::fs::write(
+            dir.join(".config/neuropipe/config.toml"),
+            "[ipc]\ntts_cmd = \"ipc:///tmp/neuropipe_tts_cmd.sock\"\ntts_events = \"ipc:///tmp/neuropipe_tts_events.sock\"\n\n[tts.defaults]\nengine = \"kokoro\"\nvoice = \"af_bella\"\nquality = \"high\"\nidle_timeout_sec = 60\nspeed = 1.0\n",
+        )
+        .unwrap();
+
+        let mut service = TtsService::new(Config::default());
+
+        // Defaults in a fresh in-memory config.
+        assert_eq!(service.config.tts.defaults.engine, "kokoro");
+        assert_eq!(service.reload_config()["status"], "ok");
+
+        // Change the config file, then reload picks it up.
+        std::fs::write(
+            dir.join(".config/neuropipe/config.toml"),
+            "[ipc]\ntts_cmd = \"ipc:///tmp/neuropipe_tts_cmd.sock\"\ntts_events = \"ipc:///tmp/neuropipe_tts_events.sock\"\n\n[tts.defaults]\nengine = \"pocket-tts\"\nvoice = \"v2/en_SZ\"\nquality = \"low\"\nidle_timeout_sec = 30\nspeed = 1.2\n\n[tts.speeds]\npocket-tts = 1.5\n\n[tts.qualities]\npocket-tts = \"low\"\n",
+        )
+        .unwrap();
+        let reply = service.reload_config();
+        assert_eq!(reply["status"], "ok");
+        assert_eq!(service.config.tts.defaults.engine, "pocket-tts");
+        assert_eq!(service.config.tts.defaults.voice, "v2/en_SZ");
+        assert_eq!(service.config.tts.defaults.idle_timeout_sec, 30);
+        assert_eq!(service.active_speed_for("pocket-tts"), 1.5);
+        assert_eq!(service.active_quality_for("pocket-tts"), "low");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        match original_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
     }
 
     #[test]

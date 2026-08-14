@@ -398,6 +398,7 @@ impl SttService {
                 touch_activity(&self.last_activity);
                 json!({"status": "ok"})
             }
+            Some("reload_config") => self.reload_config(),
             Some(command) => {
                 json!({"status": "error", "message": format!("Unknown command '{command}'")})
             }
@@ -418,6 +419,30 @@ impl SttService {
     fn ensure_vad(&mut self, path: &std::path::Path) -> Result<()> {
         self.vad = Some(Vad::load(path)?);
         Ok(())
+    }
+
+    /// Re-read config.toml. Tuning knobs read live from `self.config`
+    /// (vad_threshold, turn_*, digital_gain, silence_timeout_sec) hot-apply
+    /// immediately; the VAD and turn-end detector are cheap to rebuild and are
+    /// refreshed too. Switching the ASR model/engine still requires a restart
+    /// (the transcription worker holds a loaded engine), which the reply flags.
+    fn reload_config(&mut self) -> Value {
+        let old_model = self.config.stt.model.clone();
+        let old_model_dir = self.config.stt.model_dir.clone();
+        self.config = crate::config::load();
+        self.endpoint = Some(build_turn_end_detector(&self.config));
+        let vad_path = self.config.vad_path();
+        if let Err(error) = self.ensure_vad(&vad_path) {
+            eprintln!("[STT] reload: failed to reload VAD from {}: {error}", vad_path.display());
+        }
+        let mut restart_required = Vec::new();
+        if self.config.stt.model != old_model || self.config.stt.model_dir != old_model_dir {
+            restart_required.push("model".to_string());
+        }
+        json!({
+            "status": "ok",
+            "restart_required": restart_required,
+        })
     }
 }
 

@@ -48,6 +48,13 @@ kokoro = 1.0
 pocket-tts = 1.0
 supertonic-3 = 1.0
 
+[tts.qualities]
+# Optional per-engine quality overrides ("low" or "high"). Unlisted engines use
+# tts.defaults.quality.
+# kokoro = "low"
+# pocket-tts = "high"
+# supertonic-3 = "high"
+
 [tts.favorites]
 # Used by: neuro-ipc tts set-state --voice next|prev
 # Empty list means cycle all available voices.

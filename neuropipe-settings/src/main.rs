@@ -1,4 +1,8 @@
+mod config;
+mod ipc;
 mod services;
+mod tts;
+mod tts_tab;
 mod window;
 
 use gtk::glib;
@@ -14,7 +18,8 @@ fn main() -> glib::ExitCode {
         let provider = gtk::CssProvider::new();
         provider.load_from_string(
             ".status-active { color: #2ec27e; } \
-             .status-inactive { color: #e01b24; }",
+             .status-inactive { color: #e01b24; } \
+             tab button.tab-close-button { opacity: 0; }",
         );
         gtk::style_context_add_provider_for_display(
             &gtk::gdk::Display::default().expect("no display"),

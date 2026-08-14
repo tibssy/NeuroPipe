@@ -172,6 +172,27 @@ fn handle_cmd(shared: &Arc<Shared>, cmd: &Value) -> Value {
         "reset_memory" => {
             shared.reset_memory()
         }
+        "reload_config" => {
+            let cfg = Config::load();
+            let mut changed = Vec::new();
+            if *shared.model.lock().unwrap() != cfg.assistant.default_model {
+                *shared.model.lock().unwrap() = cfg.assistant.default_model.clone();
+                changed.push("model".to_string());
+            }
+            let tools = serde_json::json!(cfg
+                .assistant
+                .tools
+                .iter()
+                .cloned()
+                .collect::<std::collections::HashMap<_, _>>());
+            shared.tools.lock().unwrap().set_config(&tools);
+            changed.push("tools".to_string());
+            json!({
+                "status": "ok",
+                "changed": changed,
+                "note": "system_prompt, ducking and memory settings apply from the next session",
+            })
+        }
         _ => json!({"status": "error", "message": format!("unknown command {command}")}),
     }
 }

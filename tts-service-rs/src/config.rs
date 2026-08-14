@@ -20,6 +20,8 @@ pub struct TtsConfig {
     pub defaults: Defaults,
     #[serde(default)]
     pub speeds: HashMap<String, f64>,
+    #[serde(default)]
+    pub qualities: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -47,6 +49,7 @@ impl Default for Config {
                     idle_timeout_sec: 60,
                 },
                 speeds: HashMap::new(),
+                qualities: HashMap::new(),
             },
         }
     }

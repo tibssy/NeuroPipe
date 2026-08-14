@@ -39,6 +39,12 @@ kokoro = []
 pocket_tts = []
 supertonic_3 = []
 
+[tts.qualities]
+# Optional per-engine quality overrides. Unlisted engines use tts.defaults.quality.
+# kokoro = "low"
+# pocket-tts = "high"
+# supertonic-3 = "high"
+
 [assistant]
 default_model = "llama3.2:1b"
 history_idle_timeout_sec = 3600
@@ -328,6 +334,24 @@ pub fn validate_document(cfg: &TomlValue) -> Result<(), String> {
         }
     }
 
+    if let Some(qualities_value) = tts.get("qualities") {
+        let qualities = qualities_value
+            .as_table()
+            .ok_or_else(|| "root.tts.qualities must be a table".to_string())?;
+        for (key, value) in qualities {
+            let normalized = key.replace('_', "-");
+            if !matches!(normalized.as_str(), "kokoro" | "pocket-tts" | "supertonic-3") {
+                return Err(format!("root.tts.qualities has unknown key '{key}'"));
+            }
+            let quality = value
+                .as_str()
+                .ok_or_else(|| format!("root.tts.qualities.{key} must be a string"))?;
+            if !matches!(quality, "low" | "high") {
+                return Err(format!("root.tts.qualities.{key} must be 'low' or 'high'"));
+            }
+        }
+    }
+
     let assistant = root
         .get("assistant")
         .and_then(|v| v.as_table())
@@ -572,12 +596,19 @@ fn save_config_doc(cfg: &TomlValue) -> Result<(), String> {
     write_atomic(&path, &text)
 }
 
-pub fn persist_tts_defaults(engine: &str, voice: &str, speed: Option<f64>, quality: &str) -> Result<(), String> {
+pub fn persist_tts_defaults(
+    engine: &str,
+    voice: &str,
+    speed: Option<f64>,
+    quality: Option<&str>,
+) -> Result<(), String> {
     if !matches!(engine, "kokoro" | "pocket-tts" | "supertonic-3") {
         return Err(format!("Invalid engine '{}'.", engine));
     }
-    if !matches!(quality, "low" | "high") {
-        return Err(format!("Invalid quality '{}'.", quality));
+    if let Some(quality) = quality {
+        if !matches!(quality, "low" | "high") {
+            return Err(format!("Invalid quality '{}'.", quality));
+        }
     }
     if let Some(speed) = speed {
         if !(0.5..=2.0).contains(&speed) {
@@ -597,11 +628,14 @@ pub fn persist_tts_defaults(engine: &str, voice: &str, speed: Option<f64>, quali
 
     defaults.insert("engine".to_string(), TomlValue::String(engine.to_string()));
     defaults.insert("voice".to_string(), TomlValue::String(voice.to_string()));
-    defaults.insert("quality".to_string(), TomlValue::String(quality.to_string()));
 
     if let Some(speed) = speed {
         let speeds = ensure_table(tts, "speeds");
         speeds.insert(engine.to_string(), TomlValue::Float(speed));
+    }
+    if let Some(quality) = quality {
+        let qualities = ensure_table(tts, "qualities");
+        qualities.insert(engine.to_string(), TomlValue::String(quality.to_string()));
     }
 
     save_config_doc(&cfg)

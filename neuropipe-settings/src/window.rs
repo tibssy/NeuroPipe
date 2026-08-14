@@ -1,3 +1,4 @@
+use gtk::glib;
 use gtk::prelude::*;
 use libadwaita::{prelude::*, Application, ApplicationWindow};
 
@@ -25,6 +26,10 @@ fn placeholder_body(title: &str, detail: &str) -> gtk::Box {
 }
 
 fn build_tab(service: Service) -> gtk::Widget {
+    if service == Service::Tts {
+        return crate::tts_tab::build_tts_tab();
+    }
+
     let scroller = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vexpand(true)
@@ -39,10 +44,7 @@ fn build_tab(service: Service) -> gtk::Widget {
             "Assistant",
             "Placeholder for Assistant settings (model, memory, tools, ducking).",
         ),
-        Service::Tts => (
-            "Text-to-Speech",
-            "Placeholder for TTS settings (engine, voice, speed, quality).",
-        ),
+        Service::Tts => unreachable!("TTS handled above"),
     };
     scroller.set_child(Some(&placeholder_body(title, detail)));
     scroller.upcast()
@@ -87,6 +89,10 @@ pub fn build_window(app: &Application) -> ApplicationWindow {
         let page = tab_view.append(&build_tab(*service));
         page.set_title(service.label());
     }
+
+    // Close buttons are hidden via CSS; deny any close-page requests too so the
+    // (invisible) button's click hotspot can never close a tab.
+    tab_view.connect_close_page(|_, _| glib::Propagation::Stop);
 
     let tab_bar = libadwaita::TabBar::new();
     tab_bar.set_view(Some(&tab_view));
