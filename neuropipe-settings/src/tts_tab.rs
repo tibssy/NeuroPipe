@@ -1,11 +1,23 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
+use gtk::glib;
 use gtk::prelude::*;
 use libadwaita::prelude::*;
+use serde_json::Value;
 
 use crate::config;
 use crate::tts;
+
+const DEFAULT_TEST_SENTENCE: &str =
+    "The quick brown fox jumps over the lazy dog. How does my voice sound?";
+
+const EQ_BARS: usize = 4;
+
+/// Shared callback that renders a button/indicator state (and optional detail).
+type RenderFn = Rc<dyn Fn(ButtonState, Option<&str>)>;
 
 /// Builds the TTS tab: engine selector + voice selector, populated from the
 /// installed models, persisting changes straight to config.toml.
@@ -181,6 +193,13 @@ pub fn build_tts_tab() -> gtk::Widget {
         });
     }
 
+    page.add(&build_test_group(
+        Rc::clone(&shared_engine),
+        Rc::clone(&shared_voice),
+        &speed_row,
+        &quality_row,
+    ));
+
     page.upcast()
 }
 
@@ -223,7 +242,7 @@ fn populate_quality_row(row: &libadwaita::ComboRow, engine: &str) {
 
 fn apply_hint() -> gtk::Label {
     let hint = gtk::Label::new(Some(
-        "Changes are saved to config.toml and take effect the next time the TTS service loads it.",
+        "Changes are saved to config.toml and apply to a running service immediately.",
     ));
     hint.add_css_class("dim-label");
     hint.set_wrap(true);
@@ -232,4 +251,212 @@ fn apply_hint() -> gtk::Label {
     hint.set_margin_start(16);
     hint.set_margin_end(16);
     hint
+}
+
+/// Builds the "Test Voice" group: an editable sentence and a stateful play
+/// button whose icon reflects the live TTS state — play = idle, spinner =
+/// processing/generating, animated wave = speaking.
+fn build_test_group(
+    shared_engine: Rc<RefCell<String>>,
+    shared_voice: Rc<RefCell<String>>,
+    speed_row: &libadwaita::SpinRow,
+    quality_row: &libadwaita::ComboRow,
+) -> libadwaita::PreferencesGroup {
+    let group = libadwaita::PreferencesGroup::new();
+
+    let sentence_entry = gtk::Entry::new();
+    sentence_entry.set_text(DEFAULT_TEST_SENTENCE);
+    sentence_entry.set_placeholder_text(Some("Text to speak"));
+    sentence_entry.set_tooltip_text(Some("Text spoken when you press Play test"));
+
+    let play_icon = gtk::Image::from_icon_name("media-playback-start");
+
+    let spinner = gtk::Spinner::new();
+
+    let wave = gtk::Box::new(gtk::Orientation::Horizontal, 3);
+    wave.set_valign(gtk::Align::Center);
+    wave.set_halign(gtk::Align::Center);
+    for i in 0..EQ_BARS {
+        let bar = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        bar.add_css_class("eq-bar");
+        bar.add_css_class(&format!("eq-bar-{i}"));
+        bar.set_valign(gtk::Align::Center);
+        bar.set_halign(gtk::Align::Center);
+        wave.append(&bar);
+    }
+
+    let play_button = gtk::Button::new();
+    play_button.add_css_class("suggested-action");
+    play_button.set_halign(gtk::Align::Center);
+    play_button.set_valign(gtk::Align::Center);
+    play_button.set_size_request(36, 36);
+    play_button.set_child(Some(&play_icon));
+
+    let status_label = gtk::Label::new(Some("Idle"));
+    status_label.set_css_classes(&["status-idle"]);
+    status_label.set_wrap(true);
+    status_label.set_max_width_chars(48);
+
+    // Header row inside the card: title + subtitle on the left, state
+    // indicator (text) and the play button at the end of the row.
+    let header = libadwaita::ActionRow::new();
+    header.set_title("Test Voice");
+    header.set_subtitle("Speak a sample sentence with the current settings.");
+    let header_suffix = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    header_suffix.set_valign(gtk::Align::Center);
+    status_label.set_valign(gtk::Align::Center);
+    header_suffix.append(&status_label);
+    header_suffix.append(&play_button);
+    header.add_suffix(&header_suffix);
+    group.add(&header);
+
+    // Text input in the same card, below the header row.
+    let row = libadwaita::PreferencesRow::new();
+    row.set_child(Some(&sentence_entry));
+    group.add(&row);
+
+    let state = Rc::new(RefCell::new(ButtonState::Idle));
+    let processing_since = Rc::new(RefCell::new(None));
+
+    let render: RenderFn = {
+        let play_button = play_button.clone();
+        let spinner = spinner.clone();
+        let wave = wave.clone();
+        let play_icon = play_icon.clone();
+        let status_label = status_label.clone();
+        let state = Rc::clone(&state);
+        let processing_since = Rc::clone(&processing_since);
+        Rc::new(move |next, detail| {
+            if next != ButtonState::Processing {
+                *processing_since.borrow_mut() = None;
+            } else if processing_since.borrow().is_none() {
+                *processing_since.borrow_mut() = Some(Instant::now());
+            }
+            *state.borrow_mut() = next;
+            spinner.stop();
+            match next {
+                ButtonState::Idle => {
+                    play_button.set_child(Some(&play_icon));
+                    wave.remove_css_class("eq-active");
+                    status_label.set_text("Idle");
+                    status_label.set_css_classes(&["status-idle"]);
+                }
+                ButtonState::Processing => {
+                    play_button.set_child(Some(&spinner));
+                    spinner.start();
+                    status_label.set_text("Processing…");
+                    status_label.set_css_classes(&["status-idle"]);
+                }
+                ButtonState::Speaking => {
+                    play_button.set_child(Some(&wave));
+                    wave.add_css_class("eq-active");
+                    status_label.set_text("Speaking");
+                    status_label.set_css_classes(&["status-active"]);
+                }
+                ButtonState::Unavailable => {
+                    play_button.set_child(Some(&play_icon));
+                    wave.remove_css_class("eq-active");
+                    status_label.set_text(detail.unwrap_or("Service unavailable"));
+                    status_label.set_css_classes(&["status-inactive"]);
+                }
+            }
+        })
+    };
+
+    let run_test: Rc<dyn Fn()> = {
+        let shared_engine = Rc::clone(&shared_engine);
+        let shared_voice = Rc::clone(&shared_voice);
+        let speed_row = speed_row.clone();
+        let quality_row = quality_row.clone();
+        let sentence_entry = sentence_entry.clone();
+        let render = Rc::clone(&render);
+        Rc::new(move || {
+            let text = sentence_entry.text().to_string();
+            if text.trim().is_empty() {
+                render(ButtonState::Unavailable, Some("Enter some text to speak"));
+                return;
+            }
+            let engine = shared_engine.borrow().clone();
+            let voice = shared_voice.borrow().clone();
+            let speed = speed_row.value();
+            let quality =
+                selected_string(&quality_row).unwrap_or_else(|| config::tts_quality_for(&engine));
+            render(ButtonState::Processing, None);
+            match crate::ipc::tts_speak(&text, &engine, &voice, speed, &quality) {
+                Ok(reply) => {
+                    if reply.get("status").and_then(Value::as_str) != Some("queued") {
+                        let message = reply
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown error");
+                        render(ButtonState::Unavailable, Some(message));
+                    }
+                    // queued: hold the spinner until the poller reports speaking
+                }
+                Err(error) => render(ButtonState::Unavailable, Some(&error)),
+            }
+        })
+    };
+    {
+        let run_test = Rc::clone(&run_test);
+        play_button.connect_clicked(move |_| run_test());
+    }
+    {
+        let run_test = Rc::clone(&run_test);
+        sentence_entry.connect_activate(move |_| run_test());
+    }
+
+    // Live state: a background thread polls the service; updates are marshaled
+    // back to the GTK main thread via an idle source.
+    let (tx, rx) = mpsc::channel();
+    {
+        let render = Rc::clone(&render);
+        let state = Rc::clone(&state);
+        let processing_since = Rc::clone(&processing_since);
+        glib::idle_add_local(move || {
+            while let Ok(observed) = rx.try_recv() {
+                let current = *state.borrow();
+                let next = match observed {
+                    None => ButtonState::Unavailable,
+                    Some(true) => ButtonState::Speaking,
+                    Some(false) => match current {
+                        // Generating a test sentence: hold the spinner until
+                        // playback actually starts, unless it has been stuck
+                        // for a while (e.g. generation silently failed).
+                        ButtonState::Processing => {
+                            let stuck = processing_since
+                                .borrow()
+                                .map(|t| t.elapsed() >= Duration::from_secs(8))
+                                .unwrap_or(false);
+                            if stuck {
+                                ButtonState::Idle
+                            } else {
+                                ButtonState::Processing
+                            }
+                        }
+                        // Just finished playing.
+                        ButtonState::Speaking => ButtonState::Idle,
+                        // Reachable and quiet (idle, or recovered from a down service).
+                        _ => ButtonState::Idle,
+                    },
+                };
+                if next != current {
+                    render(next, None);
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+    crate::ipc::spawn_speaking_poller(tx);
+
+    group
+}
+
+/// Button/indicator lifecycle states for the test voice control.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ButtonState {
+    Idle,
+    Processing,
+    Speaking,
+    Unavailable,
 }

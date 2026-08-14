@@ -1,3 +1,6 @@
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use std::{fs, path::PathBuf};
 
 use serde_json::{json, Value};
@@ -57,4 +60,55 @@ pub fn notify_tts_reload() {
             eprintln!("[settings] TTS reload skipped (service not running?): {error}");
         }
     }
+}
+
+/// Ask the TTS service to speak `text` with the given settings, returning its
+/// reply (normally `{"status": "queued"}`).
+pub fn tts_speak(
+    text: &str,
+    engine: &str,
+    voice: &str,
+    speed: f64,
+    quality: &str,
+) -> Result<Value, String> {
+    send_tts_cmd(&json!({
+        "command": "speak",
+        "text": text,
+        "engine": engine,
+        "voice": voice,
+        "speed": speed,
+        "quality": quality,
+    }))
+}
+
+/// Query whether the TTS service is currently playing audio.
+pub fn tts_speaking() -> Result<bool, String> {
+    let reply = send_tts_cmd(&json!({"command": "get_state"}))?;
+    reply
+        .get("speaking")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("get_state reply missing 'speaking': {reply}"))
+}
+
+/// Background poller that reports the TTS speaking state. Sends `Some(speaking)`
+/// on each successful poll and `None` when the service is unreachable. Keeps
+/// running for the app's lifetime; the send side is dropped when the app exits.
+pub fn spawn_speaking_poller(tx: mpsc::Sender<Option<bool>>) {
+    thread::spawn(move || loop {
+        match tts_speaking() {
+            Ok(speaking) => {
+                if tx.send(Some(speaking)).is_err() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(500));
+            }
+            Err(_) => {
+                if tx.send(None).is_err() {
+                    return;
+                }
+                // Service down: the request blocks up to the 2s rcvtimeo before
+                // failing, so this throttles itself without spinning.
+            }
+        }
+    });
 }
