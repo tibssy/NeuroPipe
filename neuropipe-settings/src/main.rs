@@ -27,6 +27,9 @@ fn main() -> glib::ExitCode {
              .eq-active .eq-bar-2 { animation-delay: -0.6s; } \
              .eq-active .eq-bar-3 { animation-delay: -0.9s; } \
              @keyframes eq-bounce { 0%, 100% { min-height: 6px; } 50% { min-height: 22px; } } \
+             .chip { border-radius: 6px; background-color: mix(@card_bg_color, @card_fg_color, 0.06); border: 1px solid alpha(@card_fg_color, 0.15); } \
+             .chip > button { border-radius: 6px; } \
+             .tts-heading .heading { font-size: 1.35em; } \
              tab button.tab-close-button { opacity: 0; }",
         );
         gtk::style_context_add_provider_for_display(

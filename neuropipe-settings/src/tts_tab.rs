@@ -19,15 +19,19 @@ const EQ_BARS: usize = 4;
 /// Shared callback that renders a button/indicator state (and optional detail).
 type RenderFn = Rc<dyn Fn(ButtonState, Option<&str>)>;
 
+/// Shared callback that re-renders the per-engine favorite chips.
+type RefreshFn = Rc<dyn Fn()>;
+
 /// Builds the TTS tab: engine selector + voice selector, populated from the
 /// installed models, persisting changes straight to config.toml.
 pub fn build_tts_tab() -> gtk::Widget {
     let page = libadwaita::PreferencesPage::new();
 
     let group = libadwaita::PreferencesGroup::new();
+    group.add_css_class("tts-heading");
     group.set_title("Engine &amp; Voice");
     group.set_description(Some(
-        "Which engine the TTS service uses, and which voice to speak in.",
+        "Which engine renders speech, and which voice to use by default.",
     ));
 
     let (current_engine, current_voice) = config::tts_defaults();
@@ -64,6 +68,133 @@ pub fn build_tts_tab() -> gtk::Widget {
     let shared_voice = Rc::new(RefCell::new(current_voice.clone()));
     let suppress_persist = Rc::new(Cell::new(false));
 
+    // Favorites: a "+" suffix on the voice row adds the current voice; a
+    // 3-column chip list below shows the favorites for the current engine.
+    // NOTE: the header must be its own row — ActionRow's set_child replaces the
+    // title/subtitle layout, so the FlowBox lives in a separate PreferencesRow.
+    let favorites_flow = gtk::FlowBox::new();
+    favorites_flow.set_max_children_per_line(3);
+    favorites_flow.set_min_children_per_line(3);
+    favorites_flow.set_column_spacing(6);
+    favorites_flow.set_row_spacing(6);
+    favorites_flow.set_halign(gtk::Align::Fill);
+    favorites_flow.set_homogeneous(true);
+    favorites_flow.set_selection_mode(gtk::SelectionMode::None);
+
+    let favorites_header = libadwaita::ActionRow::new();
+    favorites_header.set_title("Favorites");
+    favorites_header.set_subtitle(
+        "Use + to add the current voice, a chip to make it the default. Starred voices power switching and cycling.",
+    );
+
+    let favorites_flow_row = libadwaita::PreferencesRow::new();
+    favorites_flow_row.set_child(Some(&favorites_flow));
+    favorites_flow_row.set_visible(false);
+
+    let add_fav_button = gtk::Button::new();
+    add_fav_button.set_icon_name("list-add-symbolic");
+    add_fav_button.add_css_class("flat");
+    add_fav_button.set_valign(gtk::Align::Center);
+    add_fav_button.set_tooltip_text(Some("Add the currently selected voice to your favorites"));
+    favorites_header.add_suffix(&add_fav_button);
+
+    // Indirection so chips (built inside the refresh closure) can trigger
+    // another refresh after a removal.
+    let favorites_holder: Rc<RefCell<Option<RefreshFn>>> = Rc::new(RefCell::new(None));
+
+    let refresh_favorites: RefreshFn = {
+        let shared_engine = Rc::clone(&shared_engine);
+        let favorites_flow = favorites_flow.clone();
+        let favorites_flow_row = favorites_flow_row.clone();
+        let voice_row = voice_row.clone();
+        let add_fav_button = add_fav_button.clone();
+        let favorites_holder = Rc::clone(&favorites_holder);
+        Rc::new(move || {
+            let engine = shared_engine.borrow().clone();
+            let voices = tts::list_voices(&engine);
+            add_fav_button.set_sensitive(!voices.is_empty());
+            let favorites = config::tts_favorite_voices(&engine);
+            favorites_flow_row.set_visible(!favorites.is_empty());
+            favorites_flow.remove_all();
+            for voice in &favorites {
+                let chip = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                chip.add_css_class("chip");
+                chip.set_hexpand(true);
+                chip.set_halign(gtk::Align::Fill);
+
+                let select = gtk::Button::new();
+                select.add_css_class("flat");
+                select.set_hexpand(true);
+                select.set_halign(gtk::Align::Fill);
+                let select_label = gtk::Label::new(Some(voice));
+                select_label.set_xalign(0.0);
+                select.set_child(Some(&select_label));
+                select.set_tooltip_text(Some("Make this the default voice"));
+
+                let remove = gtk::Button::from_icon_name("window-close-symbolic");
+                remove.add_css_class("flat");
+                remove.add_css_class("circular");
+                remove.set_valign(gtk::Align::Center);
+                remove.set_halign(gtk::Align::End);
+                remove.set_tooltip_text(Some("Remove from favorites"));
+
+                chip.append(&select);
+                chip.append(&remove);
+                favorites_flow.append(&chip);
+
+                {
+                    let voice = voice.clone();
+                    let voices = voices.clone();
+                    let voice_row = voice_row.clone();
+                    select.connect_clicked(move |_| {
+                        if let Some(idx) = voices.iter().position(|v| *v == voice) {
+                            voice_row.set_selected(idx as u32);
+                        }
+                    });
+                }
+                {
+                    let engine = engine.clone();
+                    let voice = voice.clone();
+                    let favorites_holder = Rc::clone(&favorites_holder);
+                    remove.connect_clicked(move |_| {
+                        if let Err(error) = config::persist_tts_favorite_remove(&engine, &voice) {
+                            eprintln!("[settings] failed to remove favorite: {error}");
+                        }
+                        if let Some(refresh) = favorites_holder.borrow().as_ref() {
+                            refresh();
+                        }
+                    });
+                }
+            }
+        })
+    };
+    *favorites_holder.borrow_mut() = Some(Rc::clone(&refresh_favorites));
+    refresh_favorites();
+
+    // "+" on the voice row: add the current selection as a favorite.
+    {
+        let shared_engine = Rc::clone(&shared_engine);
+        let shared_voice = Rc::clone(&shared_voice);
+        let favorites_holder = Rc::clone(&favorites_holder);
+        add_fav_button.connect_clicked(move |_| {
+            let engine = shared_engine.borrow().clone();
+            let voice = shared_voice.borrow().clone();
+            if voice.is_empty() {
+                return;
+            }
+            if config::tts_favorite_voices(&engine).contains(&voice) {
+                return;
+            }
+            if let Err(error) = config::persist_tts_favorite_add(&engine, &voice) {
+                eprintln!("[settings] failed to add favorite: {error}");
+                return;
+            }
+            if let Some(refresh) = favorites_holder.borrow().as_ref() {
+                refresh();
+            }
+        });
+    }
+
     suppress_persist.set(true);
     populate_voice_row(&voice_row, &current_engine, &current_voice);
     populate_speed_row(&speed_row, &current_engine);
@@ -73,14 +204,11 @@ pub fn build_tts_tab() -> gtk::Widget {
 
     group.add(&engine_row);
     group.add(&voice_row);
+    group.add(&favorites_header);
+    group.add(&favorites_flow_row);
     group.add(&speed_row);
     group.add(&quality_row);
-    group.add(&timeout_row);
     page.add(&group);
-
-    let hint_group = libadwaita::PreferencesGroup::new();
-    hint_group.add(&apply_hint());
-    page.add(&hint_group);
 
     // Engine changed: rebuild the voice list and refresh the per-engine speed
     // and quality, keeping the current voice when it still exists for the new
@@ -93,6 +221,7 @@ pub fn build_tts_tab() -> gtk::Widget {
         let shared_engine = Rc::clone(&shared_engine);
         let shared_voice = Rc::clone(&shared_voice);
         let suppress_persist = Rc::clone(&suppress_persist);
+        let favorites_holder = Rc::clone(&favorites_holder);
         engine_row.clone().connect_selected_notify(move |_| {
             let Some(engine) = selected_string(&engine_row) else {
                 return;
@@ -113,6 +242,9 @@ pub fn build_tts_tab() -> gtk::Widget {
             *shared_voice.borrow_mut() = voice.clone();
             if let Err(error) = config::persist_tts_defaults(&engine, &voice) {
                 eprintln!("[settings] failed to persist TTS defaults: {error}");
+            }
+            if let Some(refresh) = favorites_holder.borrow().as_ref() {
+                refresh();
             }
             crate::ipc::notify_tts_reload();
         });
@@ -200,6 +332,11 @@ pub fn build_tts_tab() -> gtk::Widget {
         &quality_row,
     ));
 
+    // Idle timeout at the end, just below the test voice card.
+    let timeout_group = libadwaita::PreferencesGroup::new();
+    timeout_group.add(&timeout_row);
+    page.add(&timeout_group);
+
     page.upcast()
 }
 
@@ -238,19 +375,6 @@ fn populate_quality_row(row: &libadwaita::ComboRow, engine: &str) {
     let current = config::tts_quality_for(engine);
     let idx = qualities.iter().position(|q| *q == current).unwrap_or(1);
     row.set_selected(idx as u32);
-}
-
-fn apply_hint() -> gtk::Label {
-    let hint = gtk::Label::new(Some(
-        "Changes are saved to config.toml and apply to a running service immediately.",
-    ));
-    hint.add_css_class("dim-label");
-    hint.set_wrap(true);
-    hint.set_xalign(0.0);
-    hint.set_margin_top(4);
-    hint.set_margin_start(16);
-    hint.set_margin_end(16);
-    hint
 }
 
 /// Builds the "Test Voice" group: an editable sentence and a stateful play

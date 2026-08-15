@@ -111,6 +111,72 @@ pub fn tts_idle_timeout_sec() -> u64 {
         .max(1) as u64
 }
 
+/// Config key for an engine's favorite voices. Matches the CLI's convention
+/// (`pocket-tts` -> `pocket_tts`, `supertonic-3` -> `supertonic_3`), which the
+/// service cycle commands read from.
+fn favorites_key(engine: &str) -> String {
+    engine.replace('-', "_")
+}
+
+/// Favorite voices for `engine` from `[tts.favorites]` (empty when unset).
+pub fn tts_favorite_voices(engine: &str) -> Vec<String> {
+    let doc = load_doc();
+    let key = favorites_key(engine);
+    doc.get("tts")
+        .and_then(|v| v.get("favorites"))
+        .and_then(|v| v.get(&key))
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Persist `voice` as a favorite for `engine`, appending if not already present.
+pub fn persist_tts_favorite_add(engine: &str, voice: &str) -> Result<(), String> {
+    if engine.is_empty() || voice.is_empty() {
+        return Err("engine and voice must be non-empty".to_string());
+    }
+    let mut doc = load_doc();
+    let root = doc.as_table_mut().ok_or("config root is not a table")?;
+    let tts = ensure_table(root, "tts");
+    let favorites = ensure_table(tts, "favorites");
+    let key = favorites_key(engine);
+    let mut list = favorites
+        .get(&key)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if list.iter().all(|v| v.as_str() != Some(voice)) {
+        list.push(Value::String(voice.to_string()));
+    }
+    favorites.insert(key, Value::Array(list));
+    save_doc(&doc)
+}
+
+/// Remove `voice` from `engine`'s favorites.
+pub fn persist_tts_favorite_remove(engine: &str, voice: &str) -> Result<(), String> {
+    if engine.is_empty() || voice.is_empty() {
+        return Err("engine and voice must be non-empty".to_string());
+    }
+    let mut doc = load_doc();
+    let root = doc.as_table_mut().ok_or("config root is not a table")?;
+    let tts = ensure_table(root, "tts");
+    let favorites = ensure_table(tts, "favorites");
+    let key = favorites_key(engine);
+    let mut list = favorites
+        .get(&key)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    list.retain(|v| v.as_str() != Some(voice));
+    favorites.insert(key, Value::Array(list));
+    save_doc(&doc)
+}
+
 fn write_atomic(path: &PathBuf, content: &str) -> std::io::Result<()> {
     let parent = path
         .parent()
@@ -195,6 +261,11 @@ fn save_doc(doc: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// `config_path()` reads the process-wide HOME env var, so tests that swap
+    /// it must run one at a time.
+    static HOME_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn defaults_fall_back_when_missing() {
@@ -238,6 +309,7 @@ mod tests {
 
     #[test]
     fn persist_roundtrip() {
+        let _guard = HOME_LOCK.lock().unwrap();
         // Isolate from the real config file, restoring HOME afterwards.
         let original_home = std::env::var("HOME").ok();
         let dir = std::env::temp_dir().join(format!("np_settings_test_{}", std::process::id()));
@@ -263,6 +335,44 @@ mod tests {
         let (engine, voice) = tts_defaults();
         assert_eq!(engine, "kokoro");
         assert_eq!(voice, "af_bella");
+
+        let _ = fs::remove_dir_all(&dir);
+        match original_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn favorites_roundtrip_with_engine_key_normalization() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        let dir = std::env::temp_dir().join(format!("np_settings_fav_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".config/neuropipe")).unwrap();
+        std::env::set_var("HOME", &dir);
+        fs::write(
+            dir.join(".config/neuropipe/config.toml"),
+            "[tts.defaults]\nengine = \"kokoro\"\nvoice = \"af_bella\"\nquality = \"high\"\nidle_timeout_sec = 60\nspeed = 1.0\n",
+        )
+        .unwrap();
+
+        assert!(tts_favorite_voices("kokoro").is_empty());
+        persist_tts_favorite_add("kokoro", "af_bella").unwrap();
+        persist_tts_favorite_add("kokoro", "af_heart").unwrap();
+        persist_tts_favorite_add("kokoro", "af_bella").unwrap();
+        persist_tts_favorite_add("pocket-tts", "v2/en_SZ").unwrap();
+
+        let kokoro = tts_favorite_voices("kokoro");
+        assert_eq!(kokoro, ["af_bella".to_string(), "af_heart".to_string()]);
+        // Kebab-case engine is stored under the snake_case key the CLI reads.
+        assert_eq!(tts_favorite_voices("pocket-tts"), ["v2/en_SZ".to_string()]);
+        assert!(tts_favorite_voices("supertonic-3").is_empty());
+
+        persist_tts_favorite_remove("kokoro", "af_bella").unwrap();
+        assert_eq!(tts_favorite_voices("kokoro"), ["af_heart".to_string()]);
+        persist_tts_favorite_remove("kokoro", "af_heart").unwrap();
+        assert!(tts_favorite_voices("kokoro").is_empty());
 
         let _ = fs::remove_dir_all(&dir);
         match original_home {
