@@ -418,12 +418,27 @@ mod tests {
 
     #[test]
     fn stt_getters_fall_back_when_missing() {
+        // These getters read config.toml from $HOME, so isolate HOME and take
+        // the same lock as the roundtrip test instead of racing it.
+        let _guard = HOME_LOCK.lock().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        let dir = std::env::temp_dir().join(format!("np_settings_stt_empty_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+
         let doc = Value::Table(Map::new());
         assert_eq!(stt_table(&doc), None);
         assert!(stt_string("model").is_empty());
         assert_eq!(stt_float("vad_threshold", DEFAULT_STT_VAD_THRESHOLD), 0.5);
         assert_eq!(stt_int("vad_start_frames", DEFAULT_STT_VAD_START_FRAMES), 5);
         assert!(stt_bool("turn_end_enabled", DEFAULT_STT_TURN_END_ENABLED));
+
+        let _ = fs::remove_dir_all(&dir);
+        match original_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
     }
 
     #[test]
