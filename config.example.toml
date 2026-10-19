@@ -10,6 +10,12 @@ assistant_cmd = "ipc:///tmp/neuropipe_assistant_cmd.sock"
 [stt]
 mode = "IDLE"
 model = "nemo-parakeet-tdt-0.6b-v3"
+# Directory holding encoder-model[.int8|.int4].onnx, decoder_joint-model[.int8|.int4].onnx
+# and vocab.txt. Switch models with:
+#   neuro-ipc stt set-model parakeet-v3      (default int8 export)
+#   neuro-ipc stt set-model parakeet-redux   (1.58-bit ternary, ~4x smaller)
+# Changing the model requires an STT service restart.
+model_dir = "~/.local/share/neuropipe/stt/parakeet-v3"
 vad_threshold = 0.5
 # Consecutive VAD-above-threshold frames required to start a recording and emit
 # listening_start (debounces transient noise; 5 frames ≈ 160 ms).

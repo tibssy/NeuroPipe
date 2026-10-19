@@ -5,7 +5,7 @@ use ort::session::Session;
 use ort::value::Tensor;
 use realfft::num_complex::Complex;
 use realfft::RealFftPlanner;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // NeMo conformer log-mel preprocessor parameters (see onnx-asr NemoPreprocessor).
 const N_FFT: usize = 512;
@@ -71,19 +71,26 @@ impl SttEngine for ParakeetEngine {
 
 impl Parakeet {
     fn load(model_dir: &Path) -> Result<Self> {
-        let encoder_path = model_dir.join("encoder-model.int8.onnx");
-        let decoder_path = model_dir.join("decoder_joint-model.int8.onnx");
+        let encoder_path = model_graph(model_dir, "encoder-model").ok_or_else(|| {
+            anyhow!(
+                "missing encoder model file (encoder-model[.int8|.int4].onnx) in {}",
+                model_dir.display()
+            )
+        })?;
+        let decoder_path = model_graph(model_dir, "decoder_joint-model").ok_or_else(|| {
+            anyhow!(
+                "missing decoder_joint model file (decoder_joint-model[.int8|.int4].onnx) in {}",
+                model_dir.display()
+            )
+        })?;
         let vocab_path = model_dir.join("vocab.txt");
         let config_path = model_dir.join("config.json");
 
-        for (name, path) in [
-            ("encoder", encoder_path.as_path()),
-            ("decoder_joint", decoder_path.as_path()),
-            ("vocab", vocab_path.as_path()),
-        ] {
-            if !path.exists() {
-                return Err(anyhow!("missing {name} model file: {}", path.display()));
-            }
+        if !vocab_path.exists() {
+            return Err(anyhow!(
+                "missing vocab model file: {}",
+                vocab_path.display()
+            ));
         }
 
         let encoder = build_session(&encoder_path)
@@ -345,6 +352,22 @@ impl Parakeet {
     }
 }
 
+/// Resolve a model graph regardless of quantization suffix. Exports name the
+/// same graph `encoder-model.int8.onnx` (istupakov int8), `encoder-model.int4.onnx`
+/// (ternary MatMulNBits repacks) or plain `encoder-model.onnx` (fp32/MatMulNBits).
+fn model_graph(model_dir: &Path, stem: &str) -> Option<PathBuf> {
+    ["int8", "int4", ""]
+        .iter()
+        .map(|suffix| {
+            if suffix.is_empty() {
+                model_dir.join(format!("{stem}.onnx"))
+            } else {
+                model_dir.join(format!("{stem}.{suffix}.onnx"))
+            }
+        })
+        .find(|path| path.is_file())
+}
+
 fn build_session(path: &Path) -> Result<Session> {
     Session::builder()
         .map_err(|error| anyhow!("create ONNX session builder: {error}"))?
@@ -463,6 +486,38 @@ mod tests {
         assert_eq!(fb80.shape(), &[257, 80]);
         assert_eq!(fb128.shape(), &[257, 128]);
         assert!(fb80.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn model_graph_accepts_quantization_suffixes() {
+        let dir = std::env::temp_dir().join(format!(
+            "np_parakeet_graphs_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(model_graph(&dir, "encoder-model").is_none());
+
+        for name in ["encoder-model.int8.onnx", "encoder-model.int4.onnx", "encoder-model.onnx"] {
+            std::fs::write(dir.join(name), b"").unwrap();
+            let found = model_graph(&dir, "encoder-model").unwrap();
+            assert_eq!(found, dir.join(name));
+            std::fs::remove_file(dir.join(name)).unwrap();
+        }
+
+        // Preference order: int8, then int4, then plain.
+        std::fs::write(dir.join("encoder-model.onnx"), b"").unwrap();
+        std::fs::write(dir.join("encoder-model.int4.onnx"), b"").unwrap();
+        assert_eq!(
+            model_graph(&dir, "encoder-model").unwrap(),
+            dir.join("encoder-model.int4.onnx")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -22,6 +22,7 @@ assistant_cmd = "ipc:///tmp/neuropipe_assistant_cmd.sock"
 [stt]
 mode = "IDLE"
 model = "nemo-parakeet-tdt-0.6b-v3"
+model_dir = "~/.local/share/neuropipe/stt/parakeet-v3"
 vad_threshold = 0.5
 digital_gain = 3.0
 silence_timeout_sec = 1.0
@@ -637,6 +638,27 @@ pub fn persist_tts_defaults(
         let qualities = ensure_table(tts, "qualities");
         qualities.insert(engine.to_string(), TomlValue::String(quality.to_string()));
     }
+
+    save_config_doc(&cfg)
+}
+
+/// Persist the STT model id and its directory together, so the service's
+/// `model` metadata and the engine path it actually loads never diverge.
+pub fn persist_stt_model(model: &str, model_dir: &str) -> Result<(), String> {
+    if model.trim().is_empty() {
+        return Err("STT model must be non-empty.".to_string());
+    }
+    if model_dir.trim().is_empty() {
+        return Err("STT model directory must be non-empty.".to_string());
+    }
+
+    let mut cfg = load_config_doc()?;
+    let root = cfg
+        .as_table_mut()
+        .ok_or_else(|| "Config root is not a TOML table".to_string())?;
+    let stt = ensure_table(root, "stt");
+    stt.insert("model".to_string(), TomlValue::String(model.to_string()));
+    stt.insert("model_dir".to_string(), TomlValue::String(model_dir.to_string()));
 
     save_config_doc(&cfg)
 }

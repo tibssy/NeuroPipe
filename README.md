@@ -116,6 +116,7 @@ Config changes from CLI commands are persisted atomically to disk. Manual file e
 Commands that persist config:
 
 - `neuro-ipc tts set-state ...`
+- `neuro-ipc stt set-model parakeet-v3|parakeet-redux`
 - `neuro-ipc assistant set-model ...`
 - `neuro-ipc assistant set-tools ...`
 

@@ -86,6 +86,8 @@ enum SttAction {
     RecordStart,
     RecordStop,
     Listen,
+    /// Switch the ASR model and its on-disk directory (parakeet-v3, parakeet-redux).
+    SetModel { model: String },
 }
 
 #[derive(clap::Args)]
@@ -155,6 +157,7 @@ fn main() {
             SttAction::RecordStart => stt::record_start(),
             SttAction::RecordStop => stt::record_stop(),
             SttAction::Listen => stt::listen(),
+            SttAction::SetModel { model } => stt::set_model(&model),
         },
         Commands::Assistant(a) => match a.action {
             AssistantAction::Mode1 { model, engine, voice } => {

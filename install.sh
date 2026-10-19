@@ -631,12 +631,59 @@ handle_supertonic_models() {
   printf "\e[32mSupertonic-3 models downloaded to %s\e[0m\n" "$models_dir"
 }
 
+download_parakeet_redux_model() {
+  local model_dir="$HOME/.local/share/neuropipe/stt/parakeet-redux"
+  local revision="1c285ba78d6f1880803f65355133a5ad3559a407"
+  local base_url="https://huggingface.co/eschmidbauer/parakeet-redux-onnx/resolve/$revision"
+  local -a required_files=(
+    "config.json"
+    "vocab.txt"
+    "encoder-model.onnx"
+    "decoder_joint-model.onnx"
+  )
+
+  local all_present=true
+  local file
+  for file in "${required_files[@]}"; do
+    if [[ ! -f "$model_dir/$file" ]]; then
+      all_present=false
+      break
+    fi
+  done
+
+  if [[ "$all_present" == true ]]; then
+    printf "\n\e[32mParakeet Redux model already present in %s\e[0m\n" "$model_dir"
+    return 0
+  fi
+
+  printf "\n\e[36mParakeet Redux is Moondream's 1.58-bit ternary variant of NVIDIA\e[0m\n"
+  printf "\e[36mParakeet TDT 0.6B v3, exported to ONNX by eschmidbauer (CC-BY-4.0).\e[0m\n"
+  printf "\e[36mSee https://huggingface.co/moondream/parakeet-redux\e[0m\n"
+  printf "\e[34mDownloading Parakeet Redux ONNX model (~420MB) to %s...\e[0m\n" "$model_dir"
+  mkdir -p "$model_dir"
+
+  for file in "${required_files[@]}"; do
+    printf "\n\e[34mDownloading %s...\e[0m\n" "$file"
+    if ! curl -fSL --progress-bar "$base_url/$file" -o "$model_dir/$file"; then
+      printf "\e[31mDownload failed for %s.\e[0m\n" "$file"
+      return 1
+    fi
+  done
+
+  printf "\e[32mParakeet Redux model downloaded to %s\e[0m\n" "$model_dir"
+}
+
 download_stt_models() {
   local model_dir="$HOME/.local/share/neuropipe/stt/parakeet-v3"
   local vad_dir="$HOME/.local/share/neuropipe/stt"
   local base_url="https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main"
   local vad_url="https://huggingface.co/onnx-community/silero-vad/resolve/main/onnx/model.onnx"
   local smart_turn_url="https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx"
+
+  # Optional alternate ASR model; a failed download must not block the default.
+  if ! download_parakeet_redux_model; then
+    printf "\n\e[33mParakeet Redux was not downloaded; the default Parakeet v3 model is still available.\e[0m\n"
+  fi
 
   if [[ -f "$model_dir/config.json" &&
         -f "$model_dir/vocab.txt" &&
