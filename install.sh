@@ -462,6 +462,66 @@ handle_pocket_tts_voices() {
   fi
 }
 
+handle_pocket_tts_models() {
+  local models_dir="$HOME/.local/share/neuropipe/models/pocket-tts"
+  local bundle_dir="$models_dir/onnx/english_2026-04"
+  local revision="58a6d00cf13d239b6748cb0769f35c580a8f606c"
+  local base_url="https://huggingface.co/KevinAHM/pocket-tts-onnx/resolve/$revision/onnx/english_2026-04"
+
+  # Both precisions are required: "high" uses the fp32 graphs, "low" uses int8.
+  local -a required_files=(
+    "bundle.json"
+    "tokenizer.model"
+    "bos_before_voice.npy"
+    "text_conditioner.onnx"
+    "text_conditioner_int8.onnx"
+    "flow_lm_main.onnx"
+    "flow_lm_main_int8.onnx"
+    "flow_lm_flow.onnx"
+    "flow_lm_flow_int8.onnx"
+    "mimi_decoder.onnx"
+    "mimi_decoder_int8.onnx"
+  )
+
+  local all_present=true
+  local file
+  for file in "${required_files[@]}"; do
+    if [[ ! -f "$bundle_dir/$file" ]]; then
+      all_present=false
+      break
+    fi
+  done
+
+  if [[ "$all_present" == true ]]; then
+    printf "\n\e[32mPocket-tts ONNX models already present in %s\e[0m\n" "$bundle_dir"
+    return 0
+  fi
+
+  printf "\n\e[36mPocket-tts ONNX models are from KevinAHM/pocket-tts-onnx (CC-BY-4.0),\e[0m\n"
+  printf "\e[36man ONNX export of Kyutai pocket-tts.\e[0m\n"
+  printf "\e[36mSee https://huggingface.co/KevinAHM/pocket-tts-onnx\e[0m\n"
+  printf "\n\e[36mPre-download Pocket-tts ONNX models (~525MB total)? [y/N]: \e[0m"
+  local answer
+  read -r answer
+  if [[ ! "$answer" =~ ^[yY] ]]; then
+    printf "\n\e[33mPocket-tts ONNX models were not downloaded; download them before using the pocket-tts engine.\e[0m\n"
+    return 0
+  fi
+
+  printf "\n\e[34mDownloading Pocket-tts ONNX models to %s...\e[0m\n" "$bundle_dir"
+  mkdir -p "$bundle_dir"
+
+  for file in "${required_files[@]}"; do
+    printf "\n\e[34mDownloading %s...\e[0m\n" "$file"
+    if ! curl -fSL --progress-bar "$base_url/$file" -o "$bundle_dir/$file"; then
+      printf "\e[31mDownload failed for %s.\e[0m\n" "$file"
+      return 1
+    fi
+  done
+
+  printf "\e[32mPocket-tts ONNX models downloaded to %s\e[0m\n" "$bundle_dir"
+}
+
 handle_kokoro_models() {
   local models_dir="$HOME/.local/share/neuropipe/models/kokoro"
 
@@ -798,6 +858,7 @@ run_build_flow() {
 
   if [[ "$selection" == "1" || "$selection" == "4" ]]; then
     handle_pocket_tts_voices
+    handle_pocket_tts_models
     handle_kokoro_models
     handle_supertonic_models
   fi
@@ -879,6 +940,7 @@ run_prebuilt_flow() {
 
   if [[ "$selection" == "1" || "$selection" == "4" ]]; then
     handle_pocket_tts_voices
+    handle_pocket_tts_models
     handle_kokoro_models
     handle_supertonic_models
   fi
