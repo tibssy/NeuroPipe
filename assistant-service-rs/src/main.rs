@@ -233,17 +233,23 @@ fn stt_loop(shared: &Arc<Shared>) {
                         // Instant barge-in: in MODE2, stop TTS the moment speech
                         // onset is detected, rather than after the full
                         // transcription arrives. MODE1 stays half-duplex.
+                        // The guard is dropped before interrupt(), which locks
+                        // the mode itself.
+                        let mode = shared.mode.lock().unwrap().clone();
+                        if mode == "MODE2"
+                            && (shared.is_busy() || shared.tts_events.is_speaking())
                         {
-                            let mode = shared.mode.lock().unwrap().clone();
-                            if mode == "MODE2"
-                                && (shared.is_busy() || shared.tts_events.is_speaking())
-                            {
-                                println!("\n[Interrupting — speech detected]");
-                                shared.interrupt();
-                            }
+                            println!("\n[Interrupting — speech detected]");
+                            shared.interrupt();
                         }
-                        let sh = Arc::clone(shared);
-                        std::thread::spawn(move || sh.warm_tts());
+                        // Pre-warm TTS only when the assistant will actually
+                        // answer (MODE1/MODE2). Dictation via a bare
+                        // `neuro-ipc stt trigger` leaves the assistant IDLE and
+                        // must not load the TTS engine.
+                        if mode == "MODE1" || mode == "MODE2" {
+                            let sh = Arc::clone(shared);
+                            std::thread::spawn(move || sh.warm_tts());
+                        }
                     }
                     "listening_end" => {
                         // Speech finished; bring the media volume back up.
