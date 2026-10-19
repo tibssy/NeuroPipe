@@ -1,8 +1,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use futures_channel::mpsc;
+use futures_util::StreamExt;
 use gtk::glib;
 use gtk::prelude::*;
 use libadwaita::prelude::*;
@@ -531,14 +532,15 @@ fn build_test_group(
     }
 
     // Live state: a background thread polls the service; updates are marshaled
-    // back to the GTK main thread via an idle source.
-    let (tx, rx) = mpsc::channel();
+    // back to the GTK main thread via a glib-local async task that only wakes
+    // when a new message arrives (no idle busy-loop).
+    let (tx, mut rx) = mpsc::unbounded();
     {
         let render = Rc::clone(&render);
         let state = Rc::clone(&state);
         let processing_since = Rc::clone(&processing_since);
-        glib::idle_add_local(move || {
-            while let Ok(observed) = rx.try_recv() {
+        glib::MainContext::default().spawn_local(async move {
+            while let Some(observed) = rx.next().await {
                 let current = *state.borrow();
                 let next = match observed {
                     None => ButtonState::Unavailable,
@@ -568,7 +570,6 @@ fn build_test_group(
                     render(next, None);
                 }
             }
-            glib::ControlFlow::Continue
         });
     }
     crate::ipc::spawn_speaking_poller(tx);

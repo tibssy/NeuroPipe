@@ -253,6 +253,79 @@ pub fn persist_tts_idle_timeout(idle_timeout_sec: u64) -> Result<(), String> {
     save_doc(&doc)
 }
 
+/// STT defaults, mirroring the STT service's own defaults so a fresh config
+/// renders the same values the service actually uses.
+pub const DEFAULT_STT_MODEL: &str = "nemo-parakeet-tdt-0.6b-v3";
+pub const DEFAULT_STT_MODEL_DIR: &str = "~/.local/share/neuropipe/stt/parakeet-v3";
+pub const DEFAULT_STT_VAD_THRESHOLD: f64 = 0.5;
+pub const DEFAULT_STT_VAD_START_FRAMES: i64 = 5;
+pub const DEFAULT_STT_DIGITAL_GAIN: f64 = 3.0;
+pub const DEFAULT_STT_SILENCE_TIMEOUT_SEC: f64 = 1.0;
+pub const DEFAULT_STT_MODEL_IDLE_TIMEOUT_SEC: i64 = 60;
+pub const DEFAULT_STT_TURN_END_ENABLED: bool = true;
+pub const DEFAULT_STT_TURN_HOLD_MS: i64 = 900;
+pub const DEFAULT_STT_TURN_END_THRESHOLD: f64 = 0.5;
+pub const DEFAULT_STT_TURN_SCORE_CADENCE_MS: i64 = 500;
+pub const DEFAULT_STT_TURN_HARD_CEILING_MS: i64 = 3500;
+pub const DEFAULT_STT_TURN_DETECTOR: &str = "smart_turn";
+pub const DEFAULT_STT_SMART_TURN_MODEL_PATH: &str =
+    "~/.local/share/neuropipe/stt/smart_turn_v3.2_cpu.onnx";
+pub const DEFAULT_STT_SMART_TURN_MIN_UTTERANCE_MS: i64 = 1200;
+
+fn stt_table(doc: &Value) -> Option<&Map<String, Value>> {
+    doc.get("stt")?.as_table()
+}
+
+/// `[stt]` string value, empty when unset.
+pub fn stt_string(key: &str) -> String {
+    let doc = load_doc();
+    stt_table(&doc)
+        .and_then(|t| t.get(key))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// `[stt]` float value, `fallback` when unset.
+pub fn stt_float(key: &str, fallback: f64) -> f64 {
+    let doc = load_doc();
+    stt_table(&doc)
+        .and_then(|t| t.get(key))
+        .and_then(Value::as_float)
+        .unwrap_or(fallback)
+}
+
+/// `[stt]` integer value, `fallback` when unset.
+pub fn stt_int(key: &str, fallback: i64) -> i64 {
+    let doc = load_doc();
+    stt_table(&doc)
+        .and_then(|t| t.get(key))
+        .and_then(Value::as_integer)
+        .unwrap_or(fallback)
+}
+
+/// `[stt]` boolean value, `fallback` when unset.
+pub fn stt_bool(key: &str, fallback: bool) -> bool {
+    let doc = load_doc();
+    stt_table(&doc)
+        .and_then(|t| t.get(key))
+        .and_then(Value::as_bool)
+        .unwrap_or(fallback)
+}
+
+/// Persist one `[stt]` scalar (string, int, float or bool), preserving the
+/// rest of the config file.
+pub fn persist_stt_scalar(key: &str, value: Value) -> Result<(), String> {
+    if key.is_empty() {
+        return Err("STT key must be non-empty".to_string());
+    }
+    let mut doc = load_doc();
+    let root = doc.as_table_mut().ok_or("config root is not a table")?;
+    let stt = ensure_table(root, "stt");
+    stt.insert(key.to_string(), value);
+    save_doc(&doc)
+}
+
 fn save_doc(doc: &Value) -> Result<(), String> {
     let text = toml::to_string_pretty(doc).map_err(|e| format!("encode config: {e}"))?;
     write_atomic(&config_path(), &text).map_err(|e| format!("write config: {e}"))
@@ -341,6 +414,61 @@ mod tests {
             Some(home) => std::env::set_var("HOME", home),
             None => std::env::remove_var("HOME"),
         }
+    }
+
+    #[test]
+    fn stt_getters_fall_back_when_missing() {
+        let doc = Value::Table(Map::new());
+        assert_eq!(stt_table(&doc), None);
+        assert!(stt_string("model").is_empty());
+        assert_eq!(stt_float("vad_threshold", DEFAULT_STT_VAD_THRESHOLD), 0.5);
+        assert_eq!(stt_int("vad_start_frames", DEFAULT_STT_VAD_START_FRAMES), 5);
+        assert!(stt_bool("turn_end_enabled", DEFAULT_STT_TURN_END_ENABLED));
+    }
+
+    #[test]
+    fn stt_persist_scalar_roundtrip() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        let dir = std::env::temp_dir().join(format!("np_settings_stt_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".config/neuropipe")).unwrap();
+        std::env::set_var("HOME", &dir);
+        fs::write(
+            dir.join(".config/neuropipe/config.toml"),
+            "[tts.defaults]\nengine = \"kokoro\"\nvoice = \"af_bella\"\nquality = \"high\"\nidle_timeout_sec = 60\nspeed = 1.0\n\n[stt]\nvad_threshold = 0.4\n",
+        )
+        .unwrap();
+
+        assert_eq!(stt_float("vad_threshold", DEFAULT_STT_VAD_THRESHOLD), 0.4);
+        persist_stt_scalar("vad_threshold", Value::Float(0.55)).unwrap();
+        persist_stt_scalar("vad_start_frames", Value::Integer(7)).unwrap();
+        persist_stt_scalar("digital_gain", Value::Float(2.5)).unwrap();
+        persist_stt_scalar("turn_end_enabled", Value::Boolean(false)).unwrap();
+        persist_stt_scalar("model", Value::String("my-model".to_string())).unwrap();
+
+        assert_eq!(stt_float("vad_threshold", DEFAULT_STT_VAD_THRESHOLD), 0.55);
+        assert_eq!(stt_int("vad_start_frames", DEFAULT_STT_VAD_START_FRAMES), 7);
+        assert_eq!(stt_float("digital_gain", DEFAULT_STT_DIGITAL_GAIN), 2.5);
+        assert!(!stt_bool("turn_end_enabled", DEFAULT_STT_TURN_END_ENABLED));
+        assert_eq!(stt_string("model"), "my-model");
+
+        // Unstored keys still fall back, and unrelated tables survive.
+        assert_eq!(stt_float("turn_end_threshold", DEFAULT_STT_TURN_END_THRESHOLD), 0.5);
+        let (engine, voice) = tts_defaults();
+        assert_eq!(engine, "kokoro");
+        assert_eq!(voice, "af_bella");
+
+        let _ = fs::remove_dir_all(&dir);
+        match original_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn stt_persist_rejects_empty_key() {
+        assert!(persist_stt_scalar("", Value::Integer(1)).is_err());
     }
 
     #[test]

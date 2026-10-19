@@ -26,6 +26,9 @@ fn placeholder_body(title: &str, detail: &str) -> gtk::Box {
 }
 
 fn build_tab(service: Service) -> gtk::Widget {
+    if service == Service::Stt {
+        return crate::stt_tab::build_stt_tab();
+    }
     if service == Service::Tts {
         return crate::tts_tab::build_tts_tab();
     }
@@ -36,10 +39,7 @@ fn build_tab(service: Service) -> gtk::Widget {
         .build();
 
     let (title, detail) = match service {
-        Service::Stt => (
-            "Speech-to-Text",
-            "Placeholder for STT settings (model, VAD, turn-end detection).",
-        ),
+        Service::Stt => unreachable!("STT handled above"),
         Service::Assistant => (
             "Assistant",
             "Placeholder for Assistant settings (model, memory, tools, ducking).",

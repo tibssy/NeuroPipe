@@ -1,12 +1,15 @@
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use std::{fs, path::PathBuf};
 
+use futures_channel::mpsc;
 use serde_json::{json, Value};
 
 /// Default TTS command socket, matching the services' fallback config.
 const DEFAULT_TTS_CMD: &str = "ipc:///tmp/neuropipe_tts_cmd.sock";
+
+/// Default STT command socket, matching the services' fallback config.
+const DEFAULT_STT_CMD: &str = "ipc:///tmp/neuropipe_cmd.sock";
 
 fn config_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
@@ -28,6 +31,68 @@ fn tts_cmd_addr() -> String {
         .and_then(|v| v.as_str())
         .unwrap_or(DEFAULT_TTS_CMD)
         .to_string()
+}
+
+/// STT command socket from `[ipc].stt_cmd`, falling back to the default the
+/// services ship with.
+fn stt_cmd_addr() -> String {
+    let Ok(raw) = fs::read_to_string(config_path()) else {
+        return DEFAULT_STT_CMD.to_string();
+    };
+    let Ok(parsed) = raw.parse::<toml::Value>() else {
+        return DEFAULT_STT_CMD.to_string();
+    };
+    parsed
+        .get("ipc")
+        .and_then(|v| v.get("stt_cmd"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(DEFAULT_STT_CMD)
+        .to_string()
+}
+
+/// Send a JSON command to the STT service and return its reply.
+fn send_stt_cmd(cmd: &Value) -> Result<Value, String> {
+    let ctx = zmq::Context::new();
+    let socket = ctx.socket(zmq::REQ).map_err(|e| e.to_string())?;
+    socket
+        .set_rcvtimeo(2000)
+        .map_err(|e| e.to_string())?;
+    socket
+        .connect(&stt_cmd_addr())
+        .map_err(|e| e.to_string())?;
+    let payload = serde_json::to_vec(cmd).map_err(|e| e.to_string())?;
+    socket.send(&payload, 0).map_err(|e| e.to_string())?;
+    let reply = socket.recv_bytes(0).map_err(|e| e.to_string())?;
+    serde_json::from_slice(&reply).map_err(|e| e.to_string())
+}
+
+/// Ask the running STT service to re-read config.toml so the settings the user
+/// just changed apply live. Best-effort: a stopped service is not an error, the
+/// change still lands in config.toml and applies on the next start. Returns
+/// the settings that need a service restart (e.g. `["model"]`).
+pub fn notify_stt_reload() -> Vec<String> {
+    match send_stt_cmd(&json!({"command": "reload_config"})) {
+        Ok(reply) => {
+            if reply.get("status").and_then(|v| v.as_str()) != Some("ok") {
+                eprintln!("[settings] STT reload failed: {reply}");
+                return Vec::new();
+            }
+            reply
+                .get("restart_required")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        Err(error) => {
+            eprintln!("[settings] STT reload skipped (service not running?): {error}");
+            Vec::new()
+        }
+    }
 }
 
 /// Send a JSON command to the TTS service and return its reply.
@@ -93,17 +158,17 @@ pub fn tts_speaking() -> Result<bool, String> {
 /// Background poller that reports the TTS speaking state. Sends `Some(speaking)`
 /// on each successful poll and `None` when the service is unreachable. Keeps
 /// running for the app's lifetime; the send side is dropped when the app exits.
-pub fn spawn_speaking_poller(tx: mpsc::Sender<Option<bool>>) {
+pub fn spawn_speaking_poller(tx: mpsc::UnboundedSender<Option<bool>>) {
     thread::spawn(move || loop {
         match tts_speaking() {
             Ok(speaking) => {
-                if tx.send(Some(speaking)).is_err() {
+                if tx.unbounded_send(Some(speaking)).is_err() {
                     return;
                 }
                 thread::sleep(Duration::from_millis(500));
             }
             Err(_) => {
-                if tx.send(None).is_err() {
+                if tx.unbounded_send(None).is_err() {
                     return;
                 }
                 // Service down: the request blocks up to the 2s rcvtimeo before

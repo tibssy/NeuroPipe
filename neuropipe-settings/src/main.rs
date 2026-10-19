@@ -1,6 +1,7 @@
 mod config;
 mod ipc;
 mod services;
+mod stt_tab;
 mod tts;
 mod tts_tab;
 mod window;

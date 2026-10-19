@@ -866,6 +866,8 @@ dependencies = [
 name = "neuropipe-settings"
 version = "0.1.0"
 dependencies = [
+ "futures-channel",
+ "futures-util",
  "gtk4",
  "libadwaita",
  "serde_json",
