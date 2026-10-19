@@ -97,6 +97,11 @@ pub fn send_cmd(addr: &str, cmd: &Value) -> Result<Value, String> {
 pub fn send_cmd_with_timeout(addr: &str, cmd: &Value, timeout_ms: i32) -> Result<Value, String> {
     let ctx = zmq::Context::new();
     let socket = ctx.socket(zmq::REQ).map_err(|e| e.to_string())?;
+    // Without this, dropping the context after a recv timeout blocks forever on
+    // the undelivered request (ZeroMQ's default linger is infinite), which
+    // makes every command hang when its service is stopped.
+    socket.set_linger(0).map_err(|e| e.to_string())?;
+    socket.set_sndtimeo(timeout_ms).map_err(|e| e.to_string())?;
     socket.set_rcvtimeo(timeout_ms).map_err(|e| e.to_string())?;
     socket.connect(addr).map_err(|e| e.to_string())?;
     let payload = serde_json::to_vec(cmd).map_err(|e| e.to_string())?;

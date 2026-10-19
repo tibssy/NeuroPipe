@@ -54,6 +54,12 @@ fn stt_cmd_addr() -> String {
 fn send_stt_cmd(cmd: &Value) -> Result<Value, String> {
     let ctx = zmq::Context::new();
     let socket = ctx.socket(zmq::REQ).map_err(|e| e.to_string())?;
+    // ZeroMQ's default infinite linger makes context teardown block forever on
+    // an undelivered request, freezing the UI when the service is stopped.
+    socket.set_linger(0).map_err(|e| e.to_string())?;
+    socket
+        .set_sndtimeo(2000)
+        .map_err(|e| e.to_string())?;
     socket
         .set_rcvtimeo(2000)
         .map_err(|e| e.to_string())?;
@@ -99,6 +105,12 @@ pub fn notify_stt_reload() -> Vec<String> {
 fn send_tts_cmd(cmd: &Value) -> Result<Value, String> {
     let ctx = zmq::Context::new();
     let socket = ctx.socket(zmq::REQ).map_err(|e| e.to_string())?;
+    // ZeroMQ's default infinite linger makes context teardown block forever on
+    // an undelivered request, freezing the UI when the service is stopped.
+    socket.set_linger(0).map_err(|e| e.to_string())?;
+    socket
+        .set_sndtimeo(2000)
+        .map_err(|e| e.to_string())?;
     socket
         .set_rcvtimeo(2000)
         .map_err(|e| e.to_string())?;
