@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -9,10 +8,7 @@ use crate::config;
 /// Persist one `[stt]` scalar and ask the live service to re-read config.toml.
 /// Returns the settings the service flagged as needing a restart, so the UI
 /// can show a "restart required" notice for model changes.
-fn persist_stt(key: &str, value: toml::Value, suppress: &Cell<bool>) -> Vec<String> {
-    if suppress.get() {
-        return Vec::new();
-    }
+fn persist_stt(key: &str, value: toml::Value) -> Vec<String> {
     if let Err(error) = config::persist_stt_scalar(key, value) {
         eprintln!("[settings] failed to persist STT {key}: {error}");
         return Vec::new();
@@ -96,7 +92,6 @@ fn restart_banner(text: &str) -> libadwaita::PreferencesRow {
 pub fn build_stt_tab() -> gtk::Widget {
     let page = libadwaita::PreferencesPage::new();
 
-    let suppress = Rc::new(Cell::new(false));
     let model_banner = restart_banner("ASR model changes apply after the STT service restarts.");
 
     // ---- ASR Model -----------------------------------------------------
@@ -134,20 +129,18 @@ pub fn build_stt_tab() -> gtk::Widget {
 
     model_entry.connect_activate({
         let model_entry = model_entry.clone();
-        let suppress = Rc::clone(&suppress);
         let model_banner = model_banner.clone();
         move |_| {
             let value = toml::Value::String(model_entry.text().trim().to_string());
-            show_restart_notice(&persist_stt("model", value, &suppress), &model_banner);
+            show_restart_notice(&persist_stt("model", value), &model_banner);
         }
     });
     model_dir_entry.connect_activate({
         let model_dir_entry = model_dir_entry.clone();
-        let suppress = Rc::clone(&suppress);
         let model_banner = model_banner.clone();
         move |_| {
             let value = toml::Value::String(model_dir_entry.text().trim().to_string());
-            show_restart_notice(&persist_stt("model_dir", value, &suppress), &model_banner);
+            show_restart_notice(&persist_stt("model_dir", value), &model_banner);
         }
     });
 
@@ -193,30 +186,26 @@ pub fn build_stt_tab() -> gtk::Widget {
 
     vad_threshold_row.connect_value_notify({
         let row = vad_threshold_row.clone();
-        let suppress = Rc::clone(&suppress);
         move |_| {
-            persist_stt("vad_threshold", stt_float(row.value()), &suppress);
+            persist_stt("vad_threshold", stt_float(row.value()));
         }
     });
     vad_start_frames_row.connect_value_notify({
         let row = vad_start_frames_row.clone();
-        let suppress = Rc::clone(&suppress);
         move |_| {
-            persist_stt("vad_start_frames", stt_int(row.value()), &suppress);
+            persist_stt("vad_start_frames", stt_int(row.value()));
         }
     });
     gain_row.connect_value_notify({
         let row = gain_row.clone();
-        let suppress = Rc::clone(&suppress);
         move |_| {
-            persist_stt("digital_gain", stt_float(row.value()), &suppress);
+            persist_stt("digital_gain", stt_float(row.value()));
         }
     });
     idle_timeout_row.connect_value_notify({
         let row = idle_timeout_row.clone();
-        let suppress = Rc::clone(&suppress);
         move |_| {
-            persist_stt("model_idle_timeout_sec", stt_int(row.value()), &suppress);
+            persist_stt("model_idle_timeout_sec", stt_int(row.value()));
         }
     });
 
@@ -354,72 +343,63 @@ pub fn build_stt_tab() -> gtk::Widget {
 
     smart_path_entry.connect_activate({
         let smart_path_entry = smart_path_entry.clone();
-        let suppress = Rc::clone(&suppress);
         move |_| {
-            persist_stt("smart_turn_model_path", toml::Value::String(smart_path_entry.text().trim().to_string()), &suppress);
+            persist_stt("smart_turn_model_path", toml::Value::String(smart_path_entry.text().trim().to_string()));
         }
     });
 
     turn_enabled_row.connect_active_notify({
         let turn_enabled_row = turn_enabled_row.clone();
         let update_sensitivity = Rc::clone(&update_sensitivity);
-        let suppress = Rc::clone(&suppress);
         move |_| {
             update_sensitivity();
-            persist_stt("turn_end_enabled", toml::Value::Boolean(turn_enabled_row.is_active()), &suppress);
+            persist_stt("turn_end_enabled", toml::Value::Boolean(turn_enabled_row.is_active()));
         }
     });
     silence_timeout_row.connect_value_notify({
         let row = silence_timeout_row.clone();
-        let suppress = Rc::clone(&suppress);
         move |_| {
-            persist_stt("silence_timeout_sec", stt_float(row.value()), &suppress);
+            persist_stt("silence_timeout_sec", stt_float(row.value()));
         }
     });
     detector_row.connect_selected_notify({
         let detector_row = detector_row.clone();
         let update_sensitivity = Rc::clone(&update_sensitivity);
-        let suppress = Rc::clone(&suppress);
         move |_| {
             update_sensitivity();
             if let Some(detector) = selected_detector(&detector_row) {
-                persist_stt("turn_detector", toml::Value::String(detector.clone()), &suppress);
+                persist_stt("turn_detector", toml::Value::String(detector.clone()));
             }
         }
     });
     hold_ms_row.connect_value_notify({
         let row = hold_ms_row.clone();
-        let suppress = Rc::clone(&suppress);
         move |_| {
-            persist_stt("turn_hold_ms", stt_int(row.value()), &suppress);
+            persist_stt("turn_hold_ms", stt_int(row.value()));
         }
     });
     threshold_row.connect_value_notify({
         let row = threshold_row.clone();
-        let suppress = Rc::clone(&suppress);
         move |_| {
-            persist_stt("turn_end_threshold", stt_float(row.value()), &suppress);
+            persist_stt("turn_end_threshold", stt_float(row.value()));
         }
     });
     cadence_row.connect_value_notify({
         let row = cadence_row.clone();
-        let suppress = Rc::clone(&suppress);
         move |_| {
-            persist_stt("turn_score_cadence_ms", stt_int(row.value()), &suppress);
+            persist_stt("turn_score_cadence_ms", stt_int(row.value()));
         }
     });
     ceiling_row.connect_value_notify({
         let row = ceiling_row.clone();
-        let suppress = Rc::clone(&suppress);
         move |_| {
-            persist_stt("turn_hard_ceiling_ms", stt_int(row.value()), &suppress);
+            persist_stt("turn_hard_ceiling_ms", stt_int(row.value()));
         }
     });
     smart_min_utterance_row.connect_value_notify({
         let row = smart_min_utterance_row.clone();
-        let suppress = Rc::clone(&suppress);
         move |_| {
-            persist_stt("smart_turn_min_utterance_ms", stt_int(row.value()), &suppress);
+            persist_stt("smart_turn_min_utterance_ms", stt_int(row.value()));
         }
     });
 
