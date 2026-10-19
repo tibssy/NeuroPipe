@@ -45,6 +45,17 @@ impl ParakeetEngine {
             inner: None,
         }
     }
+
+    /// Point the engine at another model directory. Any loaded graph is dropped
+    /// so the next `transcribe` lazily loads from the new path. This is what
+    /// lets `reload_config` hot-swap models without restarting the service.
+    pub fn set_model_dir(&mut self, model_dir: impl AsRef<Path>) {
+        let model_dir = model_dir.as_ref();
+        if self.model_dir.as_path() != model_dir {
+            self.model_dir = model_dir.to_path_buf();
+            self.inner = None;
+        }
+    }
 }
 
 impl SttEngine for ParakeetEngine {
@@ -518,6 +529,20 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_model_dir_retargets_and_unloads() {
+        let mut engine = ParakeetEngine::new("/tmp/np-model-a");
+        assert!(!engine.is_loaded());
+
+        engine.set_model_dir("/tmp/np-model-b");
+        assert_eq!(engine.model_dir, PathBuf::from("/tmp/np-model-b"));
+        assert!(!engine.is_loaded());
+
+        // Retargeting to the same directory is a no-op.
+        engine.set_model_dir("/tmp/np-model-b");
+        assert_eq!(engine.model_dir, PathBuf::from("/tmp/np-model-b"));
     }
 
     #[test]

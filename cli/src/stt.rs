@@ -52,8 +52,8 @@ fn model_files_present(dir: &Path) -> bool {
 }
 
 /// Switch the ASR model in config.toml and ask a running service to reload.
-/// The engine is bound to the directory it started with, so a restart is
-/// required for the change to take effect.
+/// The service retargets its lazily loaded engine, so the next transcription
+/// uses the new model without a restart.
 pub fn set_model(name: &str) {
     let Some((alias, model, model_dir)) = resolve_model(name) else {
         eprintln!("Unknown STT model '{name}'. Available models:");
@@ -79,9 +79,8 @@ pub fn set_model(name: &str) {
         );
     }
 
-    // Tell a running service to re-read config.toml. The engine is bound to the
-    // model directory it started with, so a restart is what actually applies
-    // the change (the reply's restart_required only compares configs).
+    // Tell a running service to re-read config.toml; it retargets the engine so
+    // the next transcription loads this model (no restart needed).
     let running = match zmq_client::send_cmd_with_timeout(
         zmq_client::stt_cmd(),
         &json!({"command": "reload_config"}),
@@ -100,8 +99,7 @@ pub fn set_model(name: &str) {
     };
 
     if running {
-        println!("The model is loaded when the service starts; restart it to apply the change:");
-        println!("  systemctl --user restart neuropipe-stt.service");
+        println!("Reloaded; the next transcription will use {alias}.");
     }
 }
 

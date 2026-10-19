@@ -257,6 +257,17 @@ pub fn persist_tts_idle_timeout(idle_timeout_sec: u64) -> Result<(), String> {
 /// renders the same values the service actually uses.
 pub const DEFAULT_STT_MODEL: &str = "nemo-parakeet-tdt-0.6b-v3";
 pub const DEFAULT_STT_MODEL_DIR: &str = "~/.local/share/neuropipe/stt/parakeet-v3";
+pub const DEFAULT_STT_REDUX_MODEL: &str = "nemo-parakeet-tdt-0.6b-v3-redux";
+pub const DEFAULT_STT_REDUX_MODEL_DIR: &str = "~/.local/share/neuropipe/stt/parakeet-redux";
+/// Bundled ASR models: (label, `[stt].model`, `[stt].model_dir`).
+pub const STT_MODEL_PRESETS: &[(&str, &str, &str)] = &[
+    ("parakeet-v3", DEFAULT_STT_MODEL, DEFAULT_STT_MODEL_DIR),
+    (
+        "parakeet-redux",
+        DEFAULT_STT_REDUX_MODEL,
+        DEFAULT_STT_REDUX_MODEL_DIR,
+    ),
+];
 pub const DEFAULT_STT_VAD_THRESHOLD: f64 = 0.5;
 pub const DEFAULT_STT_VAD_START_FRAMES: i64 = 5;
 pub const DEFAULT_STT_DIGITAL_GAIN: f64 = 3.0;
@@ -323,6 +334,23 @@ pub fn persist_stt_scalar(key: &str, value: Value) -> Result<(), String> {
     let root = doc.as_table_mut().ok_or("config root is not a table")?;
     let stt = ensure_table(root, "stt");
     stt.insert(key.to_string(), value);
+    save_doc(&doc)
+}
+
+/// Persist the `[stt]` model and its directory in a single write, so the
+/// service's model metadata and the engine path it loads never diverge.
+pub fn persist_stt_model(model: &str, model_dir: &str) -> Result<(), String> {
+    if model.trim().is_empty() {
+        return Err("STT model must be non-empty".to_string());
+    }
+    if model_dir.trim().is_empty() {
+        return Err("STT model directory must be non-empty".to_string());
+    }
+    let mut doc = load_doc();
+    let root = doc.as_table_mut().ok_or("config root is not a table")?;
+    let stt = ensure_table(root, "stt");
+    stt.insert("model".to_string(), Value::String(model.to_string()));
+    stt.insert("model_dir".to_string(), Value::String(model_dir.to_string()));
     save_doc(&doc)
 }
 
@@ -467,6 +495,11 @@ mod tests {
         assert_eq!(stt_float("digital_gain", DEFAULT_STT_DIGITAL_GAIN), 2.5);
         assert!(!stt_bool("turn_end_enabled", DEFAULT_STT_TURN_END_ENABLED));
         assert_eq!(stt_string("model"), "my-model");
+
+        // Model presets persist the id and directory in one write.
+        persist_stt_model(DEFAULT_STT_REDUX_MODEL, DEFAULT_STT_REDUX_MODEL_DIR).unwrap();
+        assert_eq!(stt_string("model"), DEFAULT_STT_REDUX_MODEL);
+        assert_eq!(stt_string("model_dir"), DEFAULT_STT_REDUX_MODEL_DIR);
 
         // Unstored keys still fall back, and unrelated tables survive.
         assert_eq!(stt_float("turn_end_threshold", DEFAULT_STT_TURN_END_THRESHOLD), 0.5);

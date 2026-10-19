@@ -74,29 +74,16 @@ fn send_stt_cmd(cmd: &Value) -> Result<Value, String> {
 
 /// Ask the running STT service to re-read config.toml so the settings the user
 /// just changed apply live. Best-effort: a stopped service is not an error, the
-/// change still lands in config.toml and applies on the next start. Returns
-/// the settings that need a service restart (e.g. `["model"]`).
-pub fn notify_stt_reload() -> Vec<String> {
+/// change still lands in config.toml and applies on the next start.
+pub fn notify_stt_reload() {
     match send_stt_cmd(&json!({"command": "reload_config"})) {
         Ok(reply) => {
             if reply.get("status").and_then(|v| v.as_str()) != Some("ok") {
                 eprintln!("[settings] STT reload failed: {reply}");
-                return Vec::new();
             }
-            reply
-                .get("restart_required")
-                .and_then(Value::as_array)
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default()
         }
         Err(error) => {
             eprintln!("[settings] STT reload skipped (service not running?): {error}");
-            Vec::new()
         }
     }
 }

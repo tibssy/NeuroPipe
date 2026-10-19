@@ -7,6 +7,7 @@ use crate::vad::Vad;
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -107,7 +108,11 @@ impl Recording {
 
 pub struct SttService {
     config: Config,
-    engine: Option<ParakeetEngine>,
+    /// Shared with the transcription worker so a config reload can retarget the
+    /// engine; the worker loads the new model lazily on the next transcript.
+    engine: Arc<Mutex<ParakeetEngine>>,
+    /// Shared with the worker for the same reason (`model_idle_timeout_sec`).
+    idle_timeout_secs: Arc<AtomicU64>,
     vad: Option<Vad>,
     endpoint: Option<Box<dyn TurnEndDetector>>,
     last_activity: Arc<Mutex<Instant>>,
@@ -117,10 +122,12 @@ pub struct SttService {
 impl SttService {
     pub fn new(config: Config) -> Self {
         let model_dir = config.stt_model_dir();
+        let idle_timeout_secs = config.stt.model_idle_timeout_sec;
         let endpoint = build_turn_end_detector(&config);
         Self {
             config,
-            engine: Some(ParakeetEngine::new(model_dir)),
+            engine: Arc::new(Mutex::new(ParakeetEngine::new(model_dir))),
+            idle_timeout_secs: Arc::new(AtomicU64::new(idle_timeout_secs)),
             vad: None,
             endpoint: Some(endpoint),
             last_activity: Arc::new(Mutex::new(Instant::now())),
@@ -150,10 +157,10 @@ impl SttService {
 
         // Transcribe in a background worker (like the legacy Python service) so
         // the audio/VAD loop is never blocked by ASR inference.
-        let engine = Arc::new(Mutex::new(self.engine.take().expect("engine")));
+        let engine = Arc::clone(&self.engine);
         let (job_tx, job_rx) = mpsc::channel::<Vec<f32>>();
         let (result_tx, result_rx) = mpsc::channel::<String>();
-        let idle_timeout = Duration::from_secs(self.config.stt.model_idle_timeout_sec);
+        let idle_timeout = Arc::clone(&self.idle_timeout_secs);
         let last_activity = Arc::clone(&self.last_activity);
         std::thread::Builder::new()
             .name("stt-transcriber".to_string())
@@ -421,27 +428,33 @@ impl SttService {
         Ok(())
     }
 
-    /// Re-read config.toml. Tuning knobs read live from `self.config`
-    /// (vad_threshold, turn_*, digital_gain, silence_timeout_sec) hot-apply
-    /// immediately; the VAD and turn-end detector are cheap to rebuild and are
-    /// refreshed too. Switching the ASR model/engine still requires a restart
-    /// (the transcription worker holds a loaded engine), which the reply flags.
+    /// Re-read config.toml and apply everything in place. Tuning knobs are read
+    /// live from `self.config`, the VAD and turn-end detector are rebuilt, and
+    /// the ASR engine is retargeted to the configured model directory. The
+    /// worker holds the engine lazily, so a model switch takes effect on the
+    /// next transcription without restarting the service.
     fn reload_config(&mut self) -> Value {
-        let old_model = self.config.stt.model.clone();
-        let old_model_dir = self.config.stt.model_dir.clone();
         self.config = crate::config::load();
+
+        let model_dir = self.config.stt_model_dir();
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_model_dir(model_dir);
+        }
+        self.idle_timeout_secs
+            .store(self.config.stt.model_idle_timeout_sec, Ordering::Relaxed);
+
         self.endpoint = Some(build_turn_end_detector(&self.config));
         let vad_path = self.config.vad_path();
         if let Err(error) = self.ensure_vad(&vad_path) {
-            eprintln!("[STT] reload: failed to reload VAD from {}: {error}", vad_path.display());
-        }
-        let mut restart_required = Vec::new();
-        if self.config.stt.model != old_model || self.config.stt.model_dir != old_model_dir {
-            restart_required.push("model".to_string());
+            eprintln!(
+                "[STT] reload: failed to reload VAD from {}: {error}",
+                vad_path.display()
+            );
         }
         json!({
             "status": "ok",
-            "restart_required": restart_required,
+            // Kept for older clients; model switches apply live now.
+            "restart_required": [],
         })
     }
 }
@@ -520,7 +533,7 @@ fn transcription_worker(
     result_tx: mpsc::Sender<String>,
     engine: Arc<Mutex<ParakeetEngine>>,
     last_activity: Arc<Mutex<Instant>>,
-    idle_timeout: Duration,
+    idle_timeout: Arc<AtomicU64>,
 ) {
     loop {
         match job_rx.recv_timeout(Duration::from_millis(100)) {
@@ -544,7 +557,8 @@ fn transcription_worker(
                     .lock()
                     .map(|a| a.elapsed())
                     .unwrap_or_default();
-                if idle_for < idle_timeout {
+                let timeout_secs = idle_timeout.load(Ordering::Relaxed);
+                if idle_for < Duration::from_secs(timeout_secs) {
                     continue;
                 }
                 let should_unload = {
@@ -552,10 +566,7 @@ fn transcription_worker(
                     engine.is_loaded()
                 };
                 if should_unload {
-                    eprintln!(
-                        "[STT] idle for {}s; unloading model",
-                        idle_timeout.as_secs()
-                    );
+                    eprintln!("[STT] idle for {}s; unloading model", timeout_secs);
                     {
                         let mut engine = engine.lock().unwrap();
                         engine.unload();

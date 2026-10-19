@@ -6,14 +6,21 @@ use libadwaita::prelude::*;
 use crate::config;
 
 /// Persist one `[stt]` scalar and ask the live service to re-read config.toml.
-/// Returns the settings the service flagged as needing a restart, so the UI
-/// can show a "restart required" notice for model changes.
-fn persist_stt(key: &str, value: toml::Value) -> Vec<String> {
+fn persist_stt(key: &str, value: toml::Value) {
     if let Err(error) = config::persist_stt_scalar(key, value) {
         eprintln!("[settings] failed to persist STT {key}: {error}");
-        return Vec::new();
+        return;
     }
-    crate::ipc::notify_stt_reload()
+    crate::ipc::notify_stt_reload();
+}
+
+/// Persist a bundled model preset's id and directory together, then reload.
+fn persist_stt_model(model: &str, model_dir: &str) {
+    if let Err(error) = config::persist_stt_model(model, model_dir) {
+        eprintln!("[settings] failed to persist STT model: {error}");
+        return;
+    }
+    crate::ipc::notify_stt_reload();
 }
 
 fn stt_int(value: f64) -> toml::Value {
@@ -32,10 +39,6 @@ fn stt_string_or(key: &str, fallback: &str) -> String {
     } else {
         value
     }
-}
-
-fn show_restart_notice(restart_required: &[String], banner: &libadwaita::PreferencesRow) {
-    banner.set_visible(restart_required.iter().any(|k| k == "model"));
 }
 
 /// An editable titled row: an entry lives in the row's suffix, exactly like the
@@ -72,44 +75,45 @@ fn spin_row(
     row
 }
 
-/// A "restart required" notice shown in the model group. Hidden until the
-/// service reports that a model change needs a restart.
-fn restart_banner(text: &str) -> libadwaita::PreferencesRow {
-    let label = gtk::Label::new(Some(text));
-    label.add_css_class("dim-label");
-    label.set_wrap(true);
-    label.set_xalign(0.0);
-
-    let row = libadwaita::PreferencesRow::new();
-    row.set_child(Some(&label));
-    row.set_visible(false);
-    row
-}
-
 /// Builds the STT tab: ASR model, VAD/capture tuning and turn-end detection,
 /// persisting every change straight to config.toml and hot-applying it via the
 /// service's reload_config command.
 pub fn build_stt_tab() -> gtk::Widget {
     let page = libadwaita::PreferencesPage::new();
 
-    let model_banner = restart_banner("ASR model changes apply after the STT service restarts.");
-
     // ---- ASR Model -----------------------------------------------------
     let model_group = libadwaita::PreferencesGroup::new();
     model_group.set_title("ASR Model");
     model_group.set_description(Some(
-        "Speech recognition backend used to transcribe the microphone. Changing the model or its directory requires a service restart.",
+        "Speech recognition backend used to transcribe the microphone. Model switches apply on the next transcription, without a service restart.",
     ));
 
-    let (model_row, model_entry) = entry_row(
-        "Model",
-        "Speech recognition model identifier",
-        &stt_string_or("model", config::DEFAULT_STT_MODEL),
-    );
+    let model_row = libadwaita::ComboRow::new();
+    model_row.set_title("Model");
+    model_row.set_subtitle("Bundled ASR model; also selects its model directory");
+    let labels = config::STT_MODEL_PRESETS
+        .iter()
+        .map(|(label, _, _)| *label)
+        .collect::<Vec<_>>();
+    model_row.set_model(Some(&gtk::StringList::new(&labels)));
+
+    let model_dir_initial = stt_string_or("model_dir", config::DEFAULT_STT_MODEL_DIR);
+    let model_initial = stt_string_or("model", config::DEFAULT_STT_MODEL);
+    let selected = config::STT_MODEL_PRESETS
+        .iter()
+        .position(|(_, _, dir)| *dir == model_dir_initial)
+        .or_else(|| {
+            config::STT_MODEL_PRESETS
+                .iter()
+                .position(|(_, model, _)| *model == model_initial)
+        })
+        .unwrap_or(0);
+    model_row.set_selected(selected as u32);
+
     let (model_dir_row, model_dir_entry) = entry_row(
         "Model directory",
-        "Directory containing the recognizer and VAD models (~ is expanded)",
-        &stt_string_or("model_dir", config::DEFAULT_STT_MODEL_DIR),
+        "Directory containing the recognizer models (~ is expanded)",
+        &model_dir_initial,
     );
     let idle_timeout_row = spin_row(
         "Model idle timeout",
@@ -124,23 +128,24 @@ pub fn build_stt_tab() -> gtk::Widget {
     model_group.add(&model_row);
     model_group.add(&model_dir_row);
     model_group.add(&idle_timeout_row);
-    model_group.add(&model_banner);
     page.add(&model_group);
 
-    model_entry.connect_activate({
-        let model_entry = model_entry.clone();
-        let model_banner = model_banner.clone();
-        move |_| {
-            let value = toml::Value::String(model_entry.text().trim().to_string());
-            show_restart_notice(&persist_stt("model", value), &model_banner);
+    model_row.connect_selected_notify({
+        let model_dir_entry = model_dir_entry.clone();
+        move |row| {
+            let Some(preset) = config::STT_MODEL_PRESETS.get(row.selected() as usize) else {
+                return;
+            };
+            let (_, model, dir) = *preset;
+            model_dir_entry.set_text(dir);
+            persist_stt_model(model, dir);
         }
     });
     model_dir_entry.connect_activate({
         let model_dir_entry = model_dir_entry.clone();
-        let model_banner = model_banner.clone();
         move |_| {
             let value = toml::Value::String(model_dir_entry.text().trim().to_string());
-            show_restart_notice(&persist_stt("model_dir", value), &model_banner);
+            persist_stt("model_dir", value);
         }
     });
 

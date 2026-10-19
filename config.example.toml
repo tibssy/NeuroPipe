@@ -14,7 +14,7 @@ model = "nemo-parakeet-tdt-0.6b-v3"
 # and vocab.txt. Switch models with:
 #   neuro-ipc stt set-model parakeet-v3      (default int8 export)
 #   neuro-ipc stt set-model parakeet-redux   (1.58-bit ternary, ~4x smaller)
-# Changing the model requires an STT service restart.
+# Changing the model hot-swaps it on the next transcription (no restart).
 model_dir = "~/.local/share/neuropipe/stt/parakeet-v3"
 vad_threshold = 0.5
 # Consecutive VAD-above-threshold frames required to start a recording and emit
