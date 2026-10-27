@@ -26,28 +26,11 @@ fn placeholder_body(title: &str, detail: &str) -> gtk::Box {
 }
 
 fn build_tab(service: Service) -> gtk::Widget {
-    if service == Service::Stt {
-        return crate::stt_tab::build_stt_tab();
+    match service {
+        Service::Stt => crate::stt_tab::build_stt_tab(),
+        Service::Assistant => crate::assistant_tab::build_assistant_tab(),
+        Service::Tts => crate::tts_tab::build_tts_tab(),
     }
-    if service == Service::Tts {
-        return crate::tts_tab::build_tts_tab();
-    }
-
-    let scroller = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vexpand(true)
-        .build();
-
-    let (title, detail) = match service {
-        Service::Stt => unreachable!("STT handled above"),
-        Service::Assistant => (
-            "Assistant",
-            "Placeholder for Assistant settings (model, memory, tools, ducking).",
-        ),
-        Service::Tts => unreachable!("TTS handled above"),
-    };
-    scroller.set_child(Some(&placeholder_body(title, detail)));
-    scroller.upcast()
 }
 
 /// Bottom status strip: one indicator per installed service, showing whether

@@ -1,5 +1,6 @@
 mod config;
 mod ipc;
+mod assistant_tab;
 mod services;
 mod stt_tab;
 mod tts;

@@ -98,6 +98,22 @@ fn handle_cmd(shared: &Arc<Shared>, cmd: &Value) -> Value {
             let models = shared.list_models();
             json!({"models": models})
         }
+        "list_model_capabilities" => match shared.list_model_capabilities() {
+            Ok(models) => json!({
+                "models": models
+                    .into_iter()
+                    .map(|(name, capabilities)| json!({
+                        "name": name,
+                        "capabilities": capabilities,
+                    }))
+                    .collect::<Vec<_>>(),
+            }),
+            Err(error) => json!({"status": "error", "message": error}),
+        },
+        "list_running_models" => match shared.running_model_details() {
+            Ok(models) => json!({"models": models}),
+            Err(error) => json!({"status": "error", "message": error}),
+        },
         "set_model" => {
             if let Some(m) = cmd.get("model").and_then(|v| v.as_str()) {
                 if !m.trim().is_empty() {
@@ -190,7 +206,7 @@ fn handle_cmd(shared: &Arc<Shared>, cmd: &Value) -> Value {
             json!({
                 "status": "ok",
                 "changed": changed,
-                "note": "system_prompt, ducking and memory settings apply from the next session",
+                "note": "system_prompt, history timeout, memory and ducking settings require an Assistant service restart; file_search reads search_folders when invoked",
             })
         }
         _ => json!({"status": "error", "message": format!("unknown command {command}")}),

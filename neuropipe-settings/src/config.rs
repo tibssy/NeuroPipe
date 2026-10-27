@@ -10,6 +10,17 @@ pub const DEFAULT_VOICE: &str = "af_bella";
 pub const DEFAULT_SPEED: f64 = 1.0;
 pub const DEFAULT_QUALITY: &str = "high";
 pub const DEFAULT_IDLE_TIMEOUT_SEC: u64 = 60;
+pub const DEFAULT_ASSISTANT_DECISION_MODEL: &str = "none";
+pub const DEFAULT_ASSISTANT_MODEL: &str = "llama3.2:1b";
+pub const DEFAULT_ASSISTANT_SEARCH_FOLDERS: &[&str] = &[
+    "~/Downloads",
+    "~/Documents",
+    "~/Videos",
+    "~/Music",
+    "~/Pictures",
+];
+pub const DEFAULT_ASSISTANT_SYSTEM_PROMPT: &str = "You are a helpful AI voice assistant.\nKeep answers short and conversational.\nThis is a voice-to-voice conversation: assume the user replies by speaking, not typing.\nIf you need confirmation (for example before using a tool in ask mode), request a spoken yes/no response and never ask the user to type.\n/set nothink";
+pub const DEFAULT_ASSISTANT_TOOL_POLICY: &str = "When the user asks about something a tool can help with, call the appropriate tool automatically. If a tool is in ask mode, request spoken permission (yes/no) and continue based on the user's voice response. Do not ask the user to type permission commands.";
 
 fn config_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
@@ -21,6 +32,223 @@ fn load_doc() -> Value {
         return Value::Table(Map::new());
     };
     raw.parse::<Value>().unwrap_or_else(|_| Value::Table(Map::new()))
+}
+
+/// Configured decision model preference. This is a settings placeholder only;
+/// the assistant service does not use it yet.
+pub fn assistant_decision_model() -> String {
+    let doc = load_doc();
+    doc
+        .get("assistant")
+        .and_then(|v| v.get("decision_model"))
+        .and_then(Value::as_str)
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or(DEFAULT_ASSISTANT_DECISION_MODEL)
+        .to_string()
+}
+
+/// Persist the decision-model placeholder selection under `[assistant]`.
+pub fn persist_assistant_decision_model(model: &str) -> Result<(), String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("Assistant decision model must be non-empty".to_string());
+    }
+    let mut doc = load_doc();
+    let root = doc.as_table_mut().ok_or("config root is not a table")?;
+    let assistant = ensure_table(root, "assistant");
+    assistant.insert(
+        "decision_model".to_string(),
+        Value::String(model.to_string()),
+    );
+    save_doc(&doc)
+}
+
+fn assistant_value(section: &str, key: &str) -> Option<Value> {
+    let doc = load_doc();
+    let assistant = doc.get("assistant")?;
+    if section == "assistant" {
+        assistant.get(key).cloned()
+    } else {
+        assistant.get(section)?.get(key).cloned()
+    }
+}
+
+pub fn assistant_string(section: &str, key: &str, fallback: &str) -> String {
+    assistant_value(section, key)
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+pub fn assistant_bool(section: &str, key: &str, fallback: bool) -> bool {
+    assistant_value(section, key)
+        .and_then(|value| value.as_bool())
+        .unwrap_or(fallback)
+}
+
+pub fn assistant_int(section: &str, key: &str, fallback: i64) -> i64 {
+    assistant_value(section, key)
+        .and_then(|value| value.as_integer())
+        .unwrap_or(fallback)
+}
+
+pub fn assistant_float(section: &str, key: &str, fallback: f64) -> f64 {
+    assistant_value(section, key)
+        .and_then(|value| value.as_float().or_else(|| value.as_integer().map(|n| n as f64)))
+        .unwrap_or(fallback)
+}
+
+pub fn assistant_default_model() -> String {
+    assistant_string("assistant", "default_model", DEFAULT_ASSISTANT_MODEL)
+}
+
+pub fn assistant_favorite_models() -> Vec<String> {
+    assistant_value("favorites", "models")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| value.as_str().map(str::to_owned))
+        .collect()
+}
+
+fn persist_assistant_model_favorites(models: Vec<String>) -> Result<(), String> {
+    let mut doc = load_doc();
+    let root = doc.as_table_mut().ok_or("config root is not a table")?;
+    let assistant = ensure_table(root, "assistant");
+    let favorites = ensure_table(assistant, "favorites");
+    favorites.insert(
+        "models".to_string(),
+        Value::Array(models.into_iter().map(Value::String).collect()),
+    );
+    save_doc(&doc)
+}
+
+pub fn persist_assistant_favorite_add(model: &str) -> Result<(), String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("Assistant model must be non-empty".to_string());
+    }
+    let mut models = assistant_favorite_models();
+    if !models.iter().any(|existing| existing == model) {
+        models.push(model.to_string());
+    }
+    persist_assistant_model_favorites(models)
+}
+
+pub fn persist_assistant_favorite_remove(model: &str) -> Result<(), String> {
+    let models = assistant_favorite_models()
+        .into_iter()
+        .filter(|existing| existing != model)
+        .collect();
+    persist_assistant_model_favorites(models)
+}
+
+pub fn assistant_search_folders() -> Vec<String> {
+    match assistant_value("assistant", "search_folders") {
+        Some(Value::Array(values)) => values
+            .into_iter()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect(),
+        _ => DEFAULT_ASSISTANT_SEARCH_FOLDERS
+            .iter()
+            .map(|folder| (*folder).to_string())
+            .collect(),
+    }
+}
+
+fn persist_assistant_search_folders(folders: Vec<String>) -> Result<(), String> {
+    let mut doc = load_doc();
+    let root = doc.as_table_mut().ok_or("config root is not a table")?;
+    let assistant = ensure_table(root, "assistant");
+    assistant.insert(
+        "search_folders".to_string(),
+        Value::Array(folders.into_iter().map(Value::String).collect()),
+    );
+    save_doc(&doc)
+}
+
+pub fn persist_assistant_search_folder_add(folder: &str) -> Result<(), String> {
+    let folder = folder.trim();
+    if folder.is_empty() {
+        return Err("Search folder must be non-empty".to_string());
+    }
+    let mut folders = assistant_search_folders();
+    if !folders.iter().any(|existing| existing == folder) {
+        folders.push(folder.to_string());
+    }
+    persist_assistant_search_folders(folders)
+}
+
+pub fn persist_assistant_search_folder_remove(folder: &str) -> Result<(), String> {
+    let folders = assistant_search_folders()
+        .into_iter()
+        .filter(|existing| existing != folder)
+        .collect();
+    persist_assistant_search_folders(folders)
+}
+
+pub fn assistant_tool_permissions() -> Vec<(String, String)> {
+    let defaults = [
+        ("open_url", "ask"),
+        ("screenshot", "ask"),
+        ("web_search", "ask"),
+        ("media_control", "allow"),
+        ("clipboard", "ask"),
+        ("file_search", "ask"),
+    ];
+    let mut permissions: std::collections::BTreeMap<String, String> = defaults
+        .iter()
+        .map(|(name, permission)| ((*name).to_string(), (*permission).to_string()))
+        .collect();
+    if let Some(Value::Table(configured)) = assistant_value("assistant", "tools") {
+        for (name, value) in configured {
+            if let Some(permission) = value.as_str() {
+                permissions.insert(name, permission.to_string());
+            }
+        }
+    }
+    permissions.into_iter().collect()
+}
+
+/// Persist an `[assistant]` scalar or a value in one of its nested tables.
+pub fn persist_assistant_value(section: &str, key: &str, value: Value) -> Result<(), String> {
+    if key.trim().is_empty() {
+        return Err("Assistant setting key must be non-empty".to_string());
+    }
+    if !matches!(section, "assistant" | "memory" | "instructions" | "tools") {
+        return Err(format!("Unsupported assistant config section '{section}'"));
+    }
+    let mut doc = load_doc();
+    let root = doc.as_table_mut().ok_or("config root is not a table")?;
+    let assistant = ensure_table(root, "assistant");
+    let target = if section == "assistant" {
+        assistant
+    } else {
+        ensure_table(assistant, section)
+    };
+    target.insert(key.to_string(), value);
+    save_doc(&doc)
+}
+
+pub fn persist_assistant_instructions(system_prompt: &str, tool_policy: &str) -> Result<(), String> {
+    if system_prompt.trim().is_empty() {
+        return Err("Assistant system prompt must be non-empty".to_string());
+    }
+    if tool_policy.trim().is_empty() {
+        return Err("Assistant tool usage policy must be non-empty".to_string());
+    }
+    let mut doc = load_doc();
+    let root = doc.as_table_mut().ok_or("config root is not a table")?;
+    let assistant = ensure_table(root, "assistant");
+    let instructions = ensure_table(assistant, "instructions");
+    instructions.insert(
+        "system_prompt".to_string(),
+        Value::String(system_prompt.to_string()),
+    );
+    instructions.insert(
+        "tool_usage_policy".to_string(),
+        Value::String(tool_policy.to_string()),
+    );
+    save_doc(&doc)
 }
 
 fn ensure_table<'a>(map: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<String, Value> {
@@ -436,6 +664,68 @@ mod tests {
         let (engine, voice) = tts_defaults();
         assert_eq!(engine, "kokoro");
         assert_eq!(voice, "af_bella");
+
+        let _ = fs::remove_dir_all(&dir);
+        match original_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn assistant_decision_model_roundtrip() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        let dir = std::env::temp_dir().join(format!(
+            "np_settings_assistant_decision_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".config/neuropipe")).unwrap();
+        std::env::set_var("HOME", &dir);
+        fs::write(
+            dir.join(".config/neuropipe/config.toml"),
+            "[assistant]\ndefault_model = \"llama3.2:1b\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(assistant_decision_model(), "none");
+        persist_assistant_decision_model("laya").unwrap();
+        assert_eq!(assistant_decision_model(), "laya");
+        persist_assistant_decision_model("tev1:0.8b").unwrap();
+        assert_eq!(assistant_decision_model(), "tev1:0.8b");
+        persist_assistant_decision_model("none").unwrap();
+        assert_eq!(assistant_decision_model(), "none");
+        assert!(persist_assistant_decision_model("  ").is_err());
+
+        // The existing assistant configuration survives the placeholder write.
+        let doc = load_doc();
+        assert_eq!(
+            doc.get("assistant")
+                .and_then(|v| v.get("default_model"))
+                .and_then(Value::as_str),
+            Some("llama3.2:1b")
+        );
+
+        assert_eq!(assistant_default_model(), "llama3.2:1b");
+        assert_eq!(assistant_favorite_models(), Vec::<String>::new());
+        persist_assistant_favorite_add("qwen3:4b").unwrap();
+        persist_assistant_favorite_add("qwen3:4b").unwrap();
+        assert_eq!(assistant_favorite_models(), vec!["qwen3:4b".to_string()]);
+        persist_assistant_favorite_remove("qwen3:4b").unwrap();
+        assert!(assistant_favorite_models().is_empty());
+
+        let default_folders = assistant_search_folders();
+        assert_eq!(default_folders.len(), DEFAULT_ASSISTANT_SEARCH_FOLDERS.len());
+        persist_assistant_search_folder_add("/tmp/np-search-test").unwrap();
+        assert!(assistant_search_folders().contains(&"/tmp/np-search-test".to_string()));
+        persist_assistant_search_folder_remove("/tmp/np-search-test").unwrap();
+        assert_eq!(assistant_search_folders(), default_folders);
+        for folder in default_folders {
+            persist_assistant_search_folder_remove(&folder).unwrap();
+        }
+        assert!(assistant_search_folders().is_empty());
+        assert_eq!(assistant_tool_permissions().len(), 6);
 
         let _ = fs::remove_dir_all(&dir);
         match original_home {

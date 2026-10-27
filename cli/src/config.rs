@@ -48,6 +48,7 @@ supertonic_3 = []
 
 [assistant]
 default_model = "llama3.2:1b"
+decision_model = "none"
 history_idle_timeout_sec = 3600
 search_folders = ["~/Downloads", "~/Documents", "~/Videos", "~/Music", "~/Pictures"]
 

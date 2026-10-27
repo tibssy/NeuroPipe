@@ -141,7 +141,7 @@ pub fn notify(title: &str, body: &str) {
 impl Shared {
     pub fn new(cfg: Config) -> Self {
         let memory = MemoryStore::new(
-            "~/.local/share/neuropipe/memory/qdrant",
+            &cfg.assistant.memory.qdrant_path,
             &cfg.assistant.memory.collection,
             &cfg.assistant.memory.embedding_model,
         );
@@ -199,6 +199,19 @@ impl Shared {
 
     pub fn list_models(&self) -> Vec<String> {
         self.ollama.list_models().unwrap_or_default()
+    }
+
+    pub fn list_model_capabilities(&self) -> Result<Vec<(String, Vec<String>)>, String> {
+        self.ollama.model_capabilities().map(|models| {
+            models
+                .into_iter()
+                .map(|model| (model.name, model.capabilities))
+                .collect()
+        })
+    }
+
+    pub fn running_model_details(&self) -> Result<Vec<Value>, String> {
+        self.ollama.running_model_details()
     }
 
     pub fn build_system_message(&self, include_tools: bool) -> HistoryEntry {
@@ -961,7 +974,7 @@ impl Shared {
 
     pub fn reset_memory(&self) -> Value {
         let mut memory = MemoryStore::new(
-            "~/.local/share/neuropipe/memory/qdrant",
+            &self.cfg.assistant.memory.qdrant_path,
             &self.cfg.assistant.memory.collection,
             &self.cfg.assistant.memory.embedding_model,
         );

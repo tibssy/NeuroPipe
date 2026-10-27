@@ -4,6 +4,7 @@ use toml::{map::Map as TomlMap, Value as TomlValue};
 
 #[derive(Clone, Debug)]
 pub struct MemoryConfig {
+    pub qdrant_path: String,
     pub enabled_local: bool,
     pub enabled_cloud: bool,
     pub summarize_on_idle: bool,
@@ -53,6 +54,7 @@ assistant_cmd = "ipc:///tmp/neuropipe_assistant_cmd.sock"
 
 [assistant]
 default_model = "llama3.2:1b"
+decision_model = "none"
 history_idle_timeout_sec = 3600
 
 [assistant.memory]
@@ -172,6 +174,11 @@ fn load_config() -> Config {
         default_model: s(&ast, "default_model", "llama3.2:1b"),
         history_idle_timeout_sec: i(&ast, "history_idle_timeout_sec", 3600).max(1) as u64,
         memory: MemoryConfig {
+            qdrant_path: s(
+                &memory_t,
+                "qdrant_path",
+                "~/.local/share/neuropipe/memory/qdrant",
+            ),
             enabled_local: b(&memory_t, "enabled_local", true),
             enabled_cloud: b(&memory_t, "enabled_cloud", false),
             summarize_on_idle: b(&memory_t, "summarize_on_idle", true),

@@ -7,6 +7,12 @@ pub struct OllamaClient {
 }
 
 #[derive(Clone, Debug)]
+pub struct OllamaModelInfo {
+    pub name: String,
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct ToolCall {
     pub name: String,
     pub arguments: Value,
@@ -192,6 +198,14 @@ impl OllamaClient {
     }
 
     pub fn list_models(&self) -> Result<Vec<String>, String> {
+        self.model_capabilities()
+            .map(|models| models.into_iter().map(|model| model.name).collect())
+    }
+
+    /// List Ollama tags together with their advertised capabilities. This lets
+    /// settings distinguish chat, embedding and decision models without relying
+    /// on model-name heuristics.
+    pub fn model_capabilities(&self) -> Result<Vec<OllamaModelInfo>, String> {
         let resp = self
             .client
             .get(self.url("/api/tags"))
@@ -206,7 +220,21 @@ impl OllamaClient {
         if let Some(models) = v.get("models").and_then(|x| x.as_array()) {
             for m in models {
                 if let Some(name) = m.get("name").and_then(|x| x.as_str()) {
-                    out.push(name.to_string());
+                    let capabilities = m
+                        .get("capabilities")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    out.push(OllamaModelInfo {
+                        name: name.to_string(),
+                        capabilities,
+                    });
                 }
             }
         }
@@ -214,6 +242,18 @@ impl OllamaClient {
     }
 
     pub fn running_models(&self) -> Result<Vec<String>, String> {
+        self.running_model_details().map(|models| {
+            models
+                .iter()
+                .filter_map(|model| model.get("name").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect()
+        })
+    }
+
+    /// Return Ollama's `/api/ps` entries with loaded-model size, context and
+    /// device allocation details intact for the settings status display.
+    pub fn running_model_details(&self) -> Result<Vec<Value>, String> {
         let resp = self
             .client
             .get(self.url("/api/ps"))
@@ -221,18 +261,13 @@ impl OllamaClient {
             .map_err(|e| e.to_string())?;
         let status = resp.status();
         if !status.is_success() {
-            return Ok(Vec::new());
+            return Err(format!("ollama /api/ps returned {status}"));
         }
         let v: Value = resp.json().map_err(|e| e.to_string())?;
-        let mut out = Vec::new();
-        if let Some(models) = v.get("models").and_then(|x| x.as_array()) {
-            for m in models {
-                if let Some(name) = m.get("name").and_then(|x| x.as_str()) {
-                    out.push(name.to_string());
-                }
-            }
-        }
-        Ok(out)
+        Ok(v.get("models")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
     }
 
     pub fn unload(&self, model: &str) {

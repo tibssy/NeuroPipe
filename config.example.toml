@@ -70,6 +70,8 @@ supertonic_3 = []
 
 [assistant]
 default_model = "llama3.2:1b"
+# Settings placeholder only; selecting Laya does not affect assistant runtime yet.
+decision_model = "none"
 history_idle_timeout_sec = 3600
 
 # Folders the `file_search` tool may look in when the user asks to find or open
