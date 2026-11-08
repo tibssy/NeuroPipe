@@ -4,7 +4,7 @@ mod service;
 
 use anyhow::Result;
 use engines::kokoro::Kokoro;
-use engines::pocket_tts::PocketTtsEngine;
+use engines::pocket_tts::{PocketTtsEngine, DEFAULT_BUNDLE};
 use engines::supertonic::SupertonicEngine;
 use engines::{Quality, TtsEngine};
 use std::env;
@@ -48,6 +48,7 @@ fn main() -> Result<()> {
         let mut engine = PocketTtsEngine::new(
             shellexpand("~/.local/share/neuropipe/models/pocket-tts"),
             quality,
+            DEFAULT_BUNDLE,
         );
         engine.load()?;
         engine.synthesize(&text, &voice, 1.0)?

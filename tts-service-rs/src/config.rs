@@ -22,6 +22,25 @@ pub struct TtsConfig {
     pub speeds: HashMap<String, f64>,
     #[serde(default)]
     pub qualities: HashMap<String, String>,
+    #[serde(default)]
+    pub pocket: PocketConfig,
+}
+
+/// Settings for the ONNX Pocket TTS backend.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
+pub struct PocketConfig {
+    /// Directory under the model root, e.g. "english_2026-04".
+    /// A future "english_2026-10" ONNX export can be selected here.
+    pub bundle: String,
+}
+
+impl Default for PocketConfig {
+    fn default() -> Self {
+        Self {
+            bundle: "english_2026-04".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -50,8 +69,15 @@ impl Default for Config {
                 },
                 speeds: HashMap::new(),
                 qualities: HashMap::new(),
+                pocket: PocketConfig::default(),
             },
         }
+    }
+}
+
+impl Config {
+    pub fn pocket_bundle(&self) -> &str {
+        &self.tts.pocket.bundle
     }
 }
 

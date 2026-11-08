@@ -48,6 +48,12 @@ speed = 1.0
 quality = "high"
 idle_timeout_sec = 60
 
+[tts.pocket]
+# ONNX bundle directory under ~/.local/share/neuropipe/models/pocket-tts/onnx.
+# The published ONNX export currently provides english_2026-04; a future
+# english_2026-10 export can be selected here.
+bundle = "english_2026-04"
+
 [tts.speeds]
 # Optional per-engine speed overrides. Unlisted engines use tts.defaults.speed.
 kokoro = 1.0

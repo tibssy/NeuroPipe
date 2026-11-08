@@ -1,4 +1,4 @@
-use super::{split_sentences, Quality, TtsEngine};
+use super::{split_sentences, Quality, StreamControl, TtsEngine};
 use anyhow::{anyhow, Context, Result};
 use ort::session::Session;
 use ort::value::{DynTensor, Tensor};
@@ -10,12 +10,18 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 const SAMPLE_RATE: u32 = 24_000;
 const MAX_TOKEN_PER_CHUNK: usize = 50;
 const EOS_LOGIT_THRESHOLD: f32 = -1.5;
 const EOS_TAIL_STEPS: usize = 8;
 const MAX_DECODE_STEPS_CAP: usize = 420;
+/// Latents decoded per streaming chunk. Smaller values start playback sooner;
+/// 15 is the decoder's throughput-friendly size, 5 trades some overhead for
+/// lower time-to-first-audio.
+const STREAM_LATENT_CHUNK: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Precision {
@@ -63,27 +69,31 @@ enum StateValue {
 
 type State = HashMap<String, StateValue>;
 
+pub const DEFAULT_BUNDLE: &str = "english_2026-04";
+
 pub struct PocketTtsEngine {
     model_dir: PathBuf,
     quality: Quality,
+    bundle: String,
     inner: Option<PocketTts>,
 }
 
 struct PocketTts {
     bundle: Bundle,
     tokenizer: Tokenizer,
-    text_conditioner: Session,
-    flow_lm_main: Session,
-    flow_lm_flow: Session,
-    mimi_decoder: Session,
+    text_conditioner: Mutex<Session>,
+    flow_lm_main: Mutex<Session>,
+    flow_lm_flow: Mutex<Session>,
+    mimi_decoder: Mutex<Session>,
     voices_dir: PathBuf,
 }
 
 impl PocketTtsEngine {
-    pub fn new(model_dir: impl AsRef<Path>, quality: Quality) -> Self {
+    pub fn new(model_dir: impl AsRef<Path>, quality: Quality, bundle: impl Into<String>) -> Self {
         Self {
             model_dir: model_dir.as_ref().to_path_buf(),
             quality,
+            bundle: bundle.into(),
             inner: None,
         }
     }
@@ -92,7 +102,11 @@ impl PocketTtsEngine {
 impl TtsEngine for PocketTtsEngine {
     fn load(&mut self) -> Result<()> {
         if self.inner.is_none() {
-            self.inner = Some(PocketTts::load(&self.model_dir, self.quality)?);
+            self.inner = Some(PocketTts::load(
+                &self.model_dir,
+                self.quality,
+                &self.bundle,
+            )?);
         }
         Ok(())
     }
@@ -121,6 +135,21 @@ impl TtsEngine for PocketTtsEngine {
         self.load()?;
         self.inner.as_mut().unwrap().synthesize(text, voice, speed)
     }
+
+    fn synthesize_stream(
+        &mut self,
+        text: &str,
+        voice: &str,
+        speed: f32,
+        stop: &AtomicBool,
+        on_chunk: &mut (dyn FnMut(&[f32], u32) -> Result<StreamControl> + Send),
+    ) -> Result<()> {
+        self.load()?;
+        self.inner
+            .as_mut()
+            .unwrap()
+            .synthesize_stream(text, voice, speed, stop, on_chunk)
+    }
 }
 
 impl PocketTts {
@@ -137,8 +166,8 @@ impl PocketTts {
         Ok(voices)
     }
 
-    fn load(model_dir: &Path, quality: Quality) -> Result<Self> {
-        let bundle_dir = model_dir.join("onnx/english_2026-04");
+    fn load(model_dir: &Path, quality: Quality, bundle_name: &str) -> Result<Self> {
+        let bundle_dir = model_dir.join("onnx").join(bundle_name);
         let bundle: Bundle =
             serde_json::from_str(&fs::read_to_string(bundle_dir.join("bundle.json"))?)?;
         let precision = Precision::from(quality);
@@ -157,10 +186,10 @@ impl PocketTts {
         Ok(Self {
             bundle,
             tokenizer,
-            text_conditioner,
-            flow_lm_main,
-            flow_lm_flow,
-            mimi_decoder,
+            text_conditioner: Mutex::new(text_conditioner),
+            flow_lm_main: Mutex::new(flow_lm_main),
+            flow_lm_flow: Mutex::new(flow_lm_flow),
+            mimi_decoder: Mutex::new(mimi_decoder),
             voices_dir,
         })
     }
@@ -169,10 +198,7 @@ impl PocketTts {
         Self::list_voice_names(self.voices_dir.parent().unwrap_or(&self.voices_dir))
     }
 
-    fn synthesize(&mut self, text: &str, voice: &str, speed: f32) -> Result<(Vec<f32>, u32)> {
-        if !(0.5..=2.0).contains(&speed) {
-            return Err(anyhow!("speed must be between 0.5 and 2.0"));
-        }
+    fn load_voice(&self, voice: &str) -> Result<State> {
         let voice_path = if voice.ends_with(".safetensors") {
             expand_path(voice)
         } else {
@@ -180,11 +206,17 @@ impl PocketTts {
         };
         let voice_bytes =
             fs::read(&voice_path).with_context(|| format!("load PocketTTS voice '{voice}'"))?;
-        let voice_state = load_voice_state(&voice_bytes, &self.bundle.flow_lm_state_manifest)?;
+        load_voice_state(&voice_bytes, &self.bundle.flow_lm_state_manifest)
+    }
+
+    fn synthesize(&mut self, text: &str, voice: &str, speed: f32) -> Result<(Vec<f32>, u32)> {
+        if !(0.5..=2.0).contains(&speed) {
+            return Err(anyhow!("speed must be between 0.5 and 2.0"));
+        }
+        let voice_state = self.load_voice(voice)?;
         let mut audio = Vec::new();
         for sentence in split_text(&self.tokenizer, text) {
-            let tokens = self.tokenizer.encode(&sentence);
-            let ids = tokens;
+            let ids = self.tokenizer.encode(&sentence);
             let text_embeddings = self.condition(&ids)?;
             let mut state = clone_state(&voice_state);
             let word_count = sentence.split_whitespace().count().max(1);
@@ -194,23 +226,114 @@ impl PocketTts {
         Ok((change_speed(&audio, speed), SAMPLE_RATE))
     }
 
-    fn condition(&mut self, ids: &[i64]) -> Result<(Vec<usize>, Vec<f32>)> {
+    fn synthesize_stream(
+        &mut self,
+        text: &str,
+        voice: &str,
+        speed: f32,
+        stop: &AtomicBool,
+        on_chunk: &mut (dyn FnMut(&[f32], u32) -> Result<StreamControl> + Send),
+    ) -> Result<()> {
+        if !(0.5..=2.0).contains(&speed) {
+            return Err(anyhow!("speed must be between 0.5 and 2.0"));
+        }
+        let voice_state = self.load_voice(voice)?;
+        let mut resampler = if (speed - 1.0).abs() > 0.001 {
+            Some(Resampler::new(speed as f64))
+        } else {
+            None
+        };
+
+        for sentence in split_text(&self.tokenizer, text) {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            let ids = self.tokenizer.encode(&sentence);
+            let text_embeddings = self.condition(&ids)?;
+            let mut state = clone_state(&voice_state);
+            let word_count = sentence.split_whitespace().count().max(1);
+            let mut mimi_state = init_state(&self.bundle.mimi_state_manifest)?;
+
+            let mut emit = |latent_chunk: &[Vec<f32>]| -> Result<()> {
+                if stop.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                let samples = self.decode_audio_chunk(&mut mimi_state, latent_chunk)?;
+                let samples = match resampler.as_mut() {
+                    Some(resampler) => resampler.process(&samples),
+                    None => samples,
+                };
+                if samples.is_empty() {
+                    return Ok(());
+                }
+                if on_chunk(&samples, SAMPLE_RATE)? == StreamControl::Stop {
+                    stop.store(true, Ordering::SeqCst);
+                }
+                Ok(())
+            };
+            self.decode_flow_with(
+                &mut state,
+                &text_embeddings,
+                ids.len(),
+                word_count,
+                Some(stop),
+                &mut emit,
+            )?;
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn condition(&self, ids: &[i64]) -> Result<(Vec<usize>, Vec<f32>)> {
         let input = Tensor::from_array((vec![1usize, ids.len()], ids.to_vec()))?;
-        let outputs = self
-            .text_conditioner
-            .run(ort::inputs!["token_ids" => input])?;
-        let (shape, data) = outputs[0].try_extract_tensor::<f32>()?;
-        let shape = shape.iter().map(|dim| *dim as usize).collect();
-        Ok((shape, data.to_vec()))
+        let (shape, data) = {
+            let mut session = self
+                .text_conditioner
+                .lock()
+                .map_err(|_| anyhow!("text conditioner lock poisoned"))?;
+            let outputs = session.run(ort::inputs!["token_ids" => input])?;
+            let (shape, data) = outputs[0].try_extract_tensor::<f32>()?;
+            (
+                shape.iter().map(|dim| *dim as usize).collect::<Vec<_>>(),
+                data.to_vec(),
+            )
+        };
+        Ok((shape, data))
     }
 
     fn decode_flow(
-        &mut self,
+        &self,
         state: &mut State,
         text_embeddings: &(Vec<usize>, Vec<f32>),
         token_count: usize,
         word_count: usize,
     ) -> Result<Vec<Vec<f32>>> {
+        let mut all = Vec::new();
+        self.decode_flow_with(
+            state,
+            text_embeddings,
+            token_count,
+            word_count,
+            None,
+            &mut |chunk| {
+                all.extend_from_slice(chunk);
+                Ok(())
+            },
+        )?;
+        Ok(all)
+    }
+
+    fn decode_flow_with(
+        &self,
+        state: &mut State,
+        text_embeddings: &(Vec<usize>, Vec<f32>),
+        token_count: usize,
+        word_count: usize,
+        stop: Option<&AtomicBool>,
+        on_chunk: &mut dyn FnMut(&[Vec<f32>]) -> Result<()>,
+    ) -> Result<()> {
         let max_len = ((token_count as f32 / 2.4) * self.bundle.frame_rate
             + 2.5 * self.bundle.frame_rate)
             .ceil()
@@ -224,7 +347,11 @@ impl PocketTts {
         let initial_sequence = (vec![1, 0, self.bundle.latent_dim], Vec::new());
         let initial = self.flow_inputs(initial_sequence, text_embeddings.clone(), state)?;
         {
-            let initial_outputs = self.flow_lm_main.run(initial)?;
+            let mut session = self
+                .flow_lm_main
+                .lock()
+                .map_err(|_| anyhow!("flow LM lock poisoned"))?;
+            let initial_outputs = session.run(initial)?;
             update_state(
                 state,
                 &initial_outputs,
@@ -237,12 +364,19 @@ impl PocketTts {
             vec![f32::NAN; self.bundle.latent_dim],
         );
         let mut eos_step = None;
-        let mut latents = Vec::new();
+        let mut latents = Vec::with_capacity(STREAM_LATENT_CHUNK);
 
         for step in 0..max_len {
+            if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
+                break;
+            }
             let inputs = self.flow_inputs(sequence.clone(), empty_embeddings.clone(), state)?;
             let (eos, cond_shape, cond_data) = {
-                let outputs = self.flow_lm_main.run(inputs)?;
+                let mut session = self
+                    .flow_lm_main
+                    .lock()
+                    .map_err(|_| anyhow!("flow LM lock poisoned"))?;
+                let outputs = session.run(inputs)?;
                 let (_, eos) = outputs[1].try_extract_tensor::<f32>()?;
                 let eos = eos.first().copied().unwrap_or(f32::NEG_INFINITY);
                 let cond = outputs[0].try_extract_tensor::<f32>()?;
@@ -269,7 +403,11 @@ impl PocketTts {
                 "x" => Tensor::from_array(([1usize, self.bundle.latent_dim], noise.clone()))?,
             ];
             let flow_data = {
-                let flow = self.flow_lm_flow.run(flow_inputs)?;
+                let mut session = self
+                    .flow_lm_flow
+                    .lock()
+                    .map_err(|_| anyhow!("flow sampler lock poisoned"))?;
+                let flow = session.run(flow_inputs)?;
                 let (_, flow_data) = flow[0].try_extract_tensor::<f32>()?;
                 flow_data.to_vec()
             };
@@ -279,8 +417,15 @@ impl PocketTts {
             }
             sequence = (vec![1, 1, self.bundle.latent_dim], latent.clone());
             latents.push(latent);
+            if latents.len() == STREAM_LATENT_CHUNK {
+                on_chunk(&latents)?;
+                latents.clear();
+            }
         }
-        Ok(latents)
+        if !latents.is_empty() && !stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
+            on_chunk(&latents)?;
+        }
+        Ok(())
     }
 
     fn flow_inputs(
@@ -302,29 +447,41 @@ impl PocketTts {
         Ok(inputs)
     }
 
-    fn decode_audio(&mut self, latents: &[Vec<f32>]) -> Result<Vec<f32>> {
+    fn decode_audio(&self, latents: &[Vec<f32>]) -> Result<Vec<f32>> {
         let mut state = init_state(&self.bundle.mimi_state_manifest)?;
         let mut audio = Vec::new();
         for chunk in latents.chunks(15) {
-            let data = chunk.iter().flatten().copied().collect::<Vec<_>>();
-            let inputs = {
-                let mut inputs = HashMap::new();
-                inputs.insert(
-                    "latent".to_string(),
-                    Tensor::from_array((vec![1usize, chunk.len(), self.bundle.latent_dim], data))?
-                        .upcast(),
-                );
-                for entry in &self.bundle.mimi_state_manifest {
-                    let value = state.get(&entry.input_name).context("missing Mimi state")?;
-                    inputs.insert(entry.input_name.clone(), value.tensor()?);
-                }
-                inputs
-            };
-            let outputs = self.mimi_decoder.run(inputs)?;
-            let (_, samples) = outputs[0].try_extract_tensor::<f32>()?;
-            audio.extend_from_slice(samples);
-            update_state(&mut state, &outputs, &self.bundle.mimi_state_manifest, 1)?;
+            audio.extend_from_slice(&self.decode_audio_chunk(&mut state, chunk)?);
         }
+        Ok(audio)
+    }
+
+    fn decode_audio_chunk(&self, state: &mut State, chunk: &[Vec<f32>]) -> Result<Vec<f32>> {
+        let data = chunk.iter().flatten().copied().collect::<Vec<_>>();
+        let inputs = {
+            let mut inputs = HashMap::new();
+            inputs.insert(
+                "latent".to_string(),
+                Tensor::from_array((vec![1usize, chunk.len(), self.bundle.latent_dim], data))?
+                    .upcast(),
+            );
+            for entry in &self.bundle.mimi_state_manifest {
+                let value = state.get(&entry.input_name).context("missing Mimi state")?;
+                inputs.insert(entry.input_name.clone(), value.tensor()?);
+            }
+            inputs
+        };
+        let audio = {
+            let mut session = self
+                .mimi_decoder
+                .lock()
+                .map_err(|_| anyhow!("Mimi decoder lock poisoned"))?;
+            let outputs = session.run(inputs)?;
+            let (_, samples) = outputs[0].try_extract_tensor::<f32>()?;
+            let audio = samples.to_vec();
+            update_state(state, &outputs, &self.bundle.mimi_state_manifest, 1)?;
+            audio
+        };
         Ok(audio)
     }
 }
@@ -684,6 +841,42 @@ impl Tokenizer {
             }
         }
         result
+    }
+}
+
+/// Chunk-wise linear resampler used for streaming playback speed.
+struct Resampler {
+    step: f64,
+    position: f64,
+    buffer: Vec<f32>,
+}
+
+impl Resampler {
+    fn new(speed: f64) -> Self {
+        Self {
+            step: speed.clamp(0.5, 2.0),
+            position: 0.0,
+            buffer: Vec::new(),
+        }
+    }
+
+    fn process(&mut self, input: &[f32]) -> Vec<f32> {
+        self.buffer.extend_from_slice(input);
+        let mut out = Vec::new();
+        while (self.position as usize + 1) < self.buffer.len() {
+            let index = self.position as usize;
+            let fraction = self.position - index as f64;
+            let a = self.buffer[index];
+            let b = self.buffer[index + 1];
+            out.push(a + (b - a) * fraction as f32);
+            self.position += self.step;
+        }
+        let consumed = self.position.floor() as usize;
+        if consumed > 0 {
+            self.buffer.drain(..consumed);
+            self.position -= consumed as f64;
+        }
+        out
     }
 }
 

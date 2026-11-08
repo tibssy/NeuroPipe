@@ -3,11 +3,19 @@ pub mod pocket_tts;
 pub mod supertonic;
 
 use anyhow::Result;
+use std::sync::atomic::AtomicBool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Quality {
     Low,
     High,
+}
+
+/// Whether the engine should keep producing audio after the current chunk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamControl {
+    Continue,
+    Stop,
 }
 
 pub trait TtsEngine: Send {
@@ -16,6 +24,23 @@ pub trait TtsEngine: Send {
     fn set_quality(&mut self, quality: Quality) -> Result<()>;
     fn voices(&mut self) -> Result<Vec<String>>;
     fn synthesize(&mut self, text: &str, voice: &str, speed: f32) -> Result<(Vec<f32>, u32)>;
+
+    /// Synthesize `text`, calling `on_chunk` as audio becomes available.
+    /// The default implementation keeps buffer-only engines working.
+    fn synthesize_stream(
+        &mut self,
+        text: &str,
+        voice: &str,
+        speed: f32,
+        _stop: &AtomicBool,
+        on_chunk: &mut (dyn FnMut(&[f32], u32) -> Result<StreamControl> + Send),
+    ) -> Result<()> {
+        let (samples, sample_rate) = self.synthesize(text, voice, speed)?;
+        if !samples.is_empty() {
+            on_chunk(&samples, sample_rate)?;
+        }
+        Ok(())
+    }
 }
 
 const ABBREVIATIONS: &[&str] = &[
