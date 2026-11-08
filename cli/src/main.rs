@@ -69,6 +69,11 @@ enum TtsAction {
         #[arg(long, value_parser = ["low", "high"])]
         quality: Option<String>,
     },
+    /// List built-in voices and local cloned voices for an engine.
+    Voices {
+        #[arg(long, value_parser = ["kokoro", "pocket-tts", "supertonic-3"])]
+        engine: Option<String>,
+    },
     Monitor,
 }
 
@@ -148,6 +153,7 @@ fn main() {
             TtsAction::SetState { engine, voice, speed, quality } => {
                 tts::set_state(engine.as_deref(), voice.as_deref(), speed, quality.as_deref());
             }
+            TtsAction::Voices { engine } => tts::voices(engine.as_deref()),
             TtsAction::Monitor => tts::monitor(),
         },
         Commands::Stt(s) => match s.action {

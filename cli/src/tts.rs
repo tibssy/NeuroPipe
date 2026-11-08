@@ -70,6 +70,28 @@ pub fn get_state() {
     }
 }
 
+pub fn voices(engine: Option<&str>) {
+    let mut cmd = json!({"command": "list_voices"});
+    if let Some(engine) = engine {
+        cmd["engine"] = json!(engine);
+    }
+    match zmq_client::send_cmd(zmq_client::tts_cmd(), &cmd) {
+        Ok(reply) => {
+            if let Some(voices) = reply.get("voices").and_then(Value::as_array) {
+                let mut stdout = io::stdout();
+                for voice in voices {
+                    if let Some(voice) = voice.as_str() {
+                        let _ = writeln!(stdout, "{voice}");
+                    }
+                }
+            } else {
+                eprintln!("{}", serde_json::to_string_pretty(&reply).unwrap());
+            }
+        }
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+
 fn cycle_voice(direction: &str, engine: Option<&str>) -> Option<String> {
     let state = zmq_client::send_cmd(zmq_client::tts_cmd(), &json!({"command": "get_state"})).ok()?;
     let current_voice = state.get("voice").and_then(|v| v.as_str()).unwrap_or("");

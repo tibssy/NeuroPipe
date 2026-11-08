@@ -165,6 +165,7 @@ Models auto-download on first use.
 
 ```bash
 ~/.local/bin/neuro-ipc tts speak "Hello" --engine pocket-tts --voice alba
+~/.local/bin/neuro-ipc tts voices --engine pocket-tts
 ~/.local/bin/neuro-ipc tts speak "Hello" --engine kokoro --voice af_bella --speed 1.15 --quality high
 ```
 
