@@ -160,17 +160,25 @@ printf 'Heard: %s\n' "$text"
 
 ### TTS engine selection
 
-Two engines available: `kokoro` (default) and `pocket-tts`. Models auto-download on first use.
+Three engines are available: `kokoro` (default), `pocket-tts`, and `supertonic-3`.
+Models auto-download on first use.
 
 ```bash
 ~/.local/bin/neuro-ipc tts speak "Hello" --engine pocket-tts --voice alba
 ~/.local/bin/neuro-ipc tts speak "Hello" --engine kokoro --voice af_bella --speed 1.15 --quality high
 ```
 
-- `--engine`: `kokoro` or `pocket-tts`
+- `--engine`: `kokoro`, `pocket-tts`, or `supertonic-3`
 - `--voice`: engine-specific voice name
 - `--speed`: playback speed (0.5–2.0)
 - `--quality`: `low` (faster) or `high` (better quality)
+
+Pocket-tts runs the ONNX bundle in-process and streams audio as it is generated.
+The published ONNX export currently provides `english_2026-04`; there is no
+`english_2026-10` ONNX export yet. Select the bundle with `[tts.pocket] bundle`
+in the config file; dropping a future `english_2026-10` bundle into
+`~/.local/share/neuropipe/models/pocket-tts/onnx/` only requires changing that
+value.
 
 Pocket-tts voice embeddings are from [Kyutai](https://kyutai.org/), licensed under [CC-BY-4.0](tts-service-rs/VOICE_CREDITS.md).
 
