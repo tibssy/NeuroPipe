@@ -448,7 +448,8 @@ handle_pocket_tts_voices() {
     return 0
   fi
 
-  local url="https://github.com/tibssy/NeuroPipe/releases/download/v0.4.0/pocket-tts-voices.zip"
+  # The voice bundle lives on the v0.8.0 release so older releases can be pruned.
+  local url="https://github.com/tibssy/NeuroPipe/releases/download/v0.8.0/pocket-tts-voices.zip"
   printf "\n\e[34mDownloading pocket-tts voices...\e[0m\n"
 
   mkdir -p "$voices_dir"
