@@ -57,6 +57,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: neuropipe-linux-${{ matrix.arch }}
+          retention-days: 1
           path: |
             tts-service-rs/target/release/neuro-tts-service-linux-${{ matrix.arch }}
             stt-service-rs/target/release/neuro-stt-service-linux-${{ matrix.arch }}
